@@ -112,7 +112,8 @@ rg.fr-par.scw.cloud/integrosa/pianorama:latest
 Set at: `https://github.com/organizations/Integrosa/settings/variables/actions`
 
 ```
-REGISTRY_URL=rg.fr-par.scw.cloud/integrosa
+REGISTRY_URL=rg.pl-waw.scw.cloud
+REGISTRY_NAMESPACE=integrosa
 REGISTRY_USERNAME=nologin
 ```
 
@@ -337,7 +338,7 @@ The workflow executes these steps:
 
 1. **Checkout code** - Clones repository with full git history
 2. **Get semantic version** - Analyzes commits to determine version
-3. **Login to registry** - Authenticates with Scaleway Container Registry
+3. **Login to registry** - Authenticates with Scaleway Container Registry using namespaced URL: `${REGISTRY_URL}/${REGISTRY_NAMESPACE}`
 4. **Build Docker image** - Builds image with version tag and latest tag
 5. **Push to registry** - Pushes both version and latest tags
 6. **Create git tag** - Creates and pushes git tag (if enabled)

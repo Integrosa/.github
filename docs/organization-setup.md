@@ -20,18 +20,35 @@ Organization variables are non-sensitive configuration values that can be used a
 
 #### REGISTRY_URL
 
-The base URL of your container registry.
+The base URL of your container registry (without namespace).
 
 - **Name:** `REGISTRY_URL`
-- **Value:** `rg.fr-par.scw.cloud/integrosa`
-- **Description:** Scaleway Container Registry URL with organization namespace
+- **Value:** `rg.pl-waw.scw.cloud`
+- **Description:** Scaleway Container Registry base URL (Warsaw region)
 - **Visibility:** Can be visible to all repositories
 
 **To set:**
 1. Go to organization settings → Actions → Variables
 2. Click "New organization variable"
 3. Enter name: `REGISTRY_URL`
-4. Enter value: `rg.fr-par.scw.cloud/integrosa`
+4. Enter value: `rg.pl-waw.scw.cloud`
+5. Select visibility (all repositories recommended)
+6. Click "Add variable"
+
+#### REGISTRY_NAMESPACE
+
+The namespace for your container registry (used for Docker login authentication).
+
+- **Name:** `REGISTRY_NAMESPACE`
+- **Value:** `integrosa`
+- **Description:** Scaleway Container Registry namespace for organization
+- **Visibility:** Can be visible to all repositories
+
+**To set:**
+1. Go to organization settings → Actions → Variables
+2. Click "New organization variable"
+3. Enter name: `REGISTRY_NAMESPACE`
+4. Enter value: `integrosa`
 5. Select visibility (all repositories recommended)
 6. Click "Add variable"
 
@@ -123,6 +140,7 @@ After configuration, verify the setup:
 ```bash
 # Organization variables should be accessible in workflows
 echo "Registry URL: ${{ vars.REGISTRY_URL }}"
+echo "Registry Namespace: ${{ vars.REGISTRY_NAMESPACE }}"
 echo "Registry Username: ${{ vars.REGISTRY_USERNAME }}"
 ```
 
@@ -142,7 +160,7 @@ jobs:
       - name: Test registry login
         run: |
           echo "${{ secrets.REGISTRY_TOKEN }}" | \
-            docker login ${{ vars.REGISTRY_URL }} \
+            docker login ${{ vars.REGISTRY_URL }}/${{ vars.REGISTRY_NAMESPACE }} \
             -u ${{ vars.REGISTRY_USERNAME }} \
             --password-stdin
 
