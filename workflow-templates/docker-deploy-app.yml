@@ -1,0 +1,29 @@
+name: Build and Deploy Docker App
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: Integrosa/.github/.github/workflows/reusable-docker-build.yml@v1
+    with:
+      organization_name: "integrosa"
+      project_name: "$default_branch"  # GitHub replaces this with repo name
+      runs_on: "homelab"
+
+  deploy:
+    needs: build
+    uses: Integrosa/.github/.github/workflows/reusable-k8s-deploy-pr.yml@v1
+    with:
+      app_name: "$default_branch"  # GitHub replaces this with repo name
+      k8s_namespace: "k3s/apps/$default_branch"  # Adjust path as needed
+      docker_image_path: ${{ needs.build.outputs.docker_image_path }}
+      docker_image_full: ${{ needs.build.outputs.docker_image_full }}
+      version_tag: ${{ needs.build.outputs.version_tag }}
+    secrets:
+      iac_token: ${{ secrets.ARGOCD_IAC_UPDATE_TOKEN }}

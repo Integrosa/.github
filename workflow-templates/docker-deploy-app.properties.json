@@ -1,0 +1,16 @@
+{
+  "name": "Integrosa Full CI/CD - Build & Deploy",
+  "description": "Complete CI/CD pipeline: build Docker image with semantic versioning, push to registry, and create deployment PR to ArgoCD.",
+  "iconName": "rocket",
+  "categories": [
+    "Deployment",
+    "Docker",
+    "CI",
+    "CD"
+  ],
+  "filePatterns": [
+    "Dockerfile",
+    "docker-compose.yml",
+    "package.json"
+  ]
+}

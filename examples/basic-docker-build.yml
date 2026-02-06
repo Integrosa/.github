@@ -1,0 +1,16 @@
+name: Basic Docker Build
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: Integrosa/.github/.github/workflows/reusable-docker-build.yml@v1
+    with:
+      organization_name: "integrosa"
+      project_name: "my-app"
+      runs_on: "homelab"

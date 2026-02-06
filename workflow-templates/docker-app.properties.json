@@ -1,0 +1,15 @@
+{
+  "name": "Integrosa Docker Build & Deploy",
+  "description": "Build Docker image with semantic versioning and push to Scaleway registry. Includes optional deployment steps.",
+  "iconName": "package",
+  "categories": [
+    "Deployment",
+    "Docker",
+    "CI"
+  ],
+  "filePatterns": [
+    "Dockerfile",
+    "docker-compose.yml",
+    "package.json"
+  ]
+}

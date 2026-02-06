@@ -1,0 +1,114 @@
+name: Reusable Docker Build
+
+on:
+  workflow_call:
+    inputs:
+      organization_name:
+        description: "Organization name for Docker image path (e.g., 'integrosa')"
+        required: true
+        type: string
+      project_name:
+        description: "Project/image name (e.g., 'pianorama')"
+        required: true
+        type: string
+      runs_on:
+        description: "Runner to use for the build job"
+        required: false
+        type: string
+        default: "homelab"
+      tag_prefix:
+        description: "Prefix for git tags"
+        required: false
+        type: string
+        default: "v"
+      major_pattern:
+        description: "Regex pattern for major version bumps"
+        required: false
+        type: string
+        default: "(BREAKING CHANGE:|!:)"
+      minor_pattern:
+        description: "Regex pattern for minor version bumps"
+        required: false
+        type: string
+        default: "feat:"
+      push_git_tag:
+        description: "Whether to create and push git tags"
+        required: false
+        type: boolean
+        default: true
+      dockerfile_path:
+        description: "Path to Dockerfile"
+        required: false
+        type: string
+        default: "./Dockerfile"
+      docker_context:
+        description: "Docker build context path"
+        required: false
+        type: string
+        default: "."
+    outputs:
+      version:
+        description: "Semantic version without prefix (e.g., '1.2.3')"
+        value: ${{ jobs.build.outputs.version }}
+      version_tag:
+        description: "Version with tag prefix (e.g., 'v1.2.3')"
+        value: ${{ jobs.build.outputs.version_tag }}
+      docker_image_full:
+        description: "Full Docker image reference with version tag"
+        value: ${{ jobs.build.outputs.docker_image_full }}
+      docker_image_path:
+        description: "Base Docker image path without tag"
+        value: ${{ jobs.build.outputs.docker_image_path }}
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: write  # Required to push tags
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+      version_tag: ${{ steps.semver.outputs.version_tag }}
+      docker_image_full: ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }}
+      docker_image_path: ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Required for semantic versioning
+        token: ${{ secrets.GITHUB_TOKEN }}  # Enables pushing tags
+
+    - name: Get semantic version
+      id: semver
+      uses: paulhatch/semantic-version@v5.4.0
+      with:
+        tag_prefix: ${{ inputs.tag_prefix }}
+        major_pattern: ${{ inputs.major_pattern }}
+        minor_pattern: ${{ inputs.minor_pattern }}
+        version_format: "${major}.${minor}.${patch}"
+
+    - name: Login to Scaleway Registry
+      run: |
+        echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ${{ vars.REGISTRY_URL }} -u ${{ vars.REGISTRY_USERNAME }} --password-stdin
+
+    - name: Build Docker image
+      run: |
+        docker build -f ${{ inputs.dockerfile_path }} -t ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }} ${{ inputs.docker_context }}
+        docker tag ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }} ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:latest
+
+    - name: Push to registry
+      run: |
+        docker push ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }}
+        docker push ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:latest
+
+    - name: Create git tag
+      if: ${{ inputs.push_git_tag }}
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a ${{ steps.semver.outputs.version_tag }} -m "Release ${{ steps.semver.outputs.version_tag }}"
+        git push origin ${{ steps.semver.outputs.version_tag }}
+
+    - name: Clean up old local images
+      run: |
+        docker image prune -f || true

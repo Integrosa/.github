@@ -1,0 +1,33 @@
+name: Multi-Service Build
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-api:
+    uses: Integrosa/.github/.github/workflows/reusable-docker-build.yml@v1
+    with:
+      organization_name: "integrosa"
+      project_name: "my-app-api"
+      dockerfile_path: "./services/api/Dockerfile"
+      docker_context: "./services/api"
+
+  build-web:
+    uses: Integrosa/.github/.github/workflows/reusable-docker-build.yml@v1
+    with:
+      organization_name: "integrosa"
+      project_name: "my-app-web"
+      dockerfile_path: "./services/web/Dockerfile"
+      docker_context: "./services/web"
+
+  build-worker:
+    uses: Integrosa/.github/.github/workflows/reusable-docker-build.yml@v1
+    with:
+      organization_name: "integrosa"
+      project_name: "my-app-worker"
+      dockerfile_path: "./services/worker/Dockerfile"
+      docker_context: "./services/worker"

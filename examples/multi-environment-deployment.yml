@@ -1,0 +1,44 @@
+name: Build and Deploy (Multi-Environment)
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: Integrosa/.github/.github/workflows/reusable-docker-build.yml@v1
+    with:
+      organization_name: "integrosa"
+      project_name: "my-app"
+      runs_on: "homelab"
+
+  deploy-staging:
+    needs: build
+    uses: Integrosa/.github/.github/workflows/reusable-k8s-deploy-pr.yml@v1
+    with:
+      app_name: "my-app"
+      k8s_namespace: "k3s/apps/my-app-staging"
+      environment: "staging"
+      pr_labels: "automated,deployment,staging"
+      docker_image_path: ${{ needs.build.outputs.docker_image_path }}
+      docker_image_full: ${{ needs.build.outputs.docker_image_full }}
+      version_tag: ${{ needs.build.outputs.version_tag }}
+    secrets:
+      iac_token: ${{ secrets.ARGOCD_IAC_UPDATE_TOKEN }}
+
+  deploy-production:
+    needs: build
+    uses: Integrosa/.github/.github/workflows/reusable-k8s-deploy-pr.yml@v1
+    with:
+      app_name: "my-app"
+      k8s_namespace: "k3s/apps/my-app"
+      environment: "production"
+      pr_labels: "automated,deployment,production"
+      docker_image_path: ${{ needs.build.outputs.docker_image_path }}
+      docker_image_full: ${{ needs.build.outputs.docker_image_full }}
+      version_tag: ${{ needs.build.outputs.version_tag }}
+    secrets:
+      iac_token: ${{ secrets.ARGOCD_IAC_UPDATE_TOKEN }}

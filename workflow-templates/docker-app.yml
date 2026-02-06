@@ -1,0 +1,25 @@
+name: Build and Deploy Docker App
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: Integrosa/.github/.github/workflows/reusable-docker-build.yml@v1
+    with:
+      organization_name: "integrosa"
+      project_name: "$default_branch"  # GitHub replaces this with repo name
+      runs_on: "homelab"
+
+  # Uncomment to add deployment
+  # deploy:
+  #   needs: build
+  #   runs-on: homelab
+  #   steps:
+  #     - name: Deploy
+  #       run: echo "Deploy ${{ needs.build.outputs.docker_image_full }}"
