@@ -13,4 +13,3 @@ jobs:
     with:
       organization_name: "integrosa"
       project_name: "my-app"
-      runs_on: "homelab"

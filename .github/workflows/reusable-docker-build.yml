@@ -12,10 +12,10 @@ on:
         required: true
         type: string
       runs_on:
-        description: "Runner to use for the build job"
+        description: "Runner to use for the build job (GitHub-hosted; homelab runner is gone)"
         required: false
         type: string
-        default: "homelab"
+        default: "ubuntu-latest"
       tag_prefix:
         description: "Prefix for git tags"
         required: false
@@ -73,33 +73,43 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       with:
         fetch-depth: 0  # Required for semantic versioning
         token: ${{ secrets.GITHUB_TOKEN }}  # Enables pushing tags
 
     - name: Get semantic version
       id: semver
-      uses: paulhatch/semantic-version@v5.4.0
+      uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3  # v5.4.0
       with:
         tag_prefix: ${{ inputs.tag_prefix }}
         major_pattern: ${{ inputs.major_pattern }}
         minor_pattern: ${{ inputs.minor_pattern }}
         version_format: "${major}.${minor}.${patch}"
 
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
     - name: Login to Scaleway Registry
-      run: |
-        echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ${{ vars.REGISTRY_URL }}/${{ vars.REGISTRY_NAMESPACE }} -u ${{ vars.REGISTRY_USERNAME }} --password-stdin
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+      with:
+        # Mirror the previously working raw login target (host + namespace path).
+        registry: ${{ vars.REGISTRY_URL }}/${{ vars.REGISTRY_NAMESPACE }}
+        username: ${{ vars.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_TOKEN }}
 
-    - name: Build Docker image
-      run: |
-        docker build -f ${{ inputs.dockerfile_path }} -t ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }} ${{ inputs.docker_context }}
-        docker tag ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }} ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:latest
-
-    - name: Push to registry
-      run: |
-        docker push ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }}
-        docker push ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:latest
+    - name: Build and push
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+      with:
+        context: ${{ inputs.docker_context }}
+        file: ${{ inputs.dockerfile_path }}
+        push: true
+        tags: |
+          ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }}
+          ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:latest
+        # GitHub Actions layer cache — cuts paid runner minutes on incremental builds
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
     - name: Create git tag
       if: ${{ inputs.push_git_tag }}
@@ -108,7 +118,3 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git tag -a ${{ steps.semver.outputs.version_tag }} -m "Release ${{ steps.semver.outputs.version_tag }}"
         git push origin ${{ steps.semver.outputs.version_tag }}
-
-    - name: Clean up old local images
-      run: |
-        docker image prune -f || true

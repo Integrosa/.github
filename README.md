@@ -23,18 +23,20 @@ Automated Docker image building with semantic versioning, registry push, and git
 
 [View Detailed Documentation](docs/docker-build-workflow.md)
 
-### 🚀 Kubernetes Deployment PR Workflow
+### 🚀 Compose Deploy PR Workflow
 
-Automated creation of deployment pull requests to your Infrastructure-as-Code repository.
+Automated creation of deployment pull requests that bump an app's image tag in the
+Docker Compose stack (`Integrosa/cluster-iac`).
 
 **Features:**
-- ✅ Updates Kubernetes manifests with new image versions
-- ✅ Creates PRs with deployment details
-- ✅ Supports multiple environments (staging, production)
-- ✅ Multiple deployment files support
-- ✅ Integrates with ArgoCD for GitOps deployments
+- ✅ Bumps the image tag in `compose/docker-compose.yml`
+- ✅ Matches by image path, so an app's `*-migrate` one-shot is bumped to the same tag
+- ✅ Creates PRs with deployment details (the deploy itself stays manual: `make deploy`)
+- ✅ Validates the version tag and fails if the image isn't found
 
-[View Detailed Documentation](docs/k8s-deploy-pr-workflow.md)
+> Replaces the former Kubernetes deployment workflow (k3s/ArgoCD were removed).
+
+[View Detailed Documentation](docs/compose-deploy-pr-workflow.md)
 
 ## 🚀 Quick Start
 
@@ -65,7 +67,7 @@ jobs:
     with:
       organization_name: "integrosa"
       project_name: "your-app-name"
-      runs_on: "homelab"
+    secrets: inherit
 ```
 
 ### Option 3: View Examples
@@ -85,7 +87,8 @@ Set these at: `https://github.com/organizations/Integrosa/settings/variables/act
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `REGISTRY_URL` | Container registry URL | `rg.fr-par.scw.cloud/integrosa` |
+| `REGISTRY_URL` | Container registry host (no namespace; the image path is `REGISTRY_URL/<org>/<project>`) | `rg.pl-waw.scw.cloud` |
+| `REGISTRY_NAMESPACE` | Registry namespace (used for the `docker login` target) | `integrosa` |
 | `REGISTRY_USERNAME` | Registry username | `nologin` |
 
 ### Required Organization Secrets
@@ -102,7 +105,7 @@ For deployment workflows:
 
 | Secret | Description |
 |--------|-------------|
-| `ARGOCD_IAC_UPDATE_TOKEN` | GitHub token for creating deployment PRs |
+| `ARGOCD_IAC_UPDATE_TOKEN` | GitHub token for creating deployment PRs in `cluster-iac`. ⚠️ Legacy name (ArgoCD is gone) — rename to e.g. `CLUSTER_IAC_TOKEN` later. |
 
 See [Organization Setup Guide](docs/organization-setup.md) for detailed instructions.
 
@@ -124,7 +127,7 @@ See [Versioning Strategy](docs/versioning-strategy.md) for migration guides and 
 ## 📚 Documentation
 
 - [Docker Build Workflow Documentation](docs/docker-build-workflow.md) - Complete reference
-- [Kubernetes Deployment PR Workflow Documentation](docs/k8s-deploy-pr-workflow.md) - Deployment automation
+- [Compose Deploy PR Workflow Documentation](docs/compose-deploy-pr-workflow.md) - Deployment automation
 - [Organization Setup Guide](docs/organization-setup.md) - Configuration instructions
 - [Versioning Strategy](docs/versioning-strategy.md) - Version management
 - [Workflow Templates Guide](workflow-templates/README.md) - Using starter templates
@@ -165,12 +168,10 @@ jobs:
 
   deploy:
     needs: build
-    uses: Integrosa/.github/.github/workflows/reusable-k8s-deploy-pr.yml@v1
+    uses: Integrosa/.github/.github/workflows/reusable-compose-deploy-pr.yml@v1
     with:
       app_name: "my-app"
-      k8s_namespace: "k3s/apps/my-app"
-      docker_image_path: ${{ needs.build.outputs.docker_image_path }}
-      docker_image_full: ${{ needs.build.outputs.docker_image_full }}
+      image_path: ${{ needs.build.outputs.docker_image_path }}
       version_tag: ${{ needs.build.outputs.version_tag }}
     secrets:
       iac_token: ${{ secrets.ARGOCD_IAC_UPDATE_TOKEN }}

@@ -1,0 +1,133 @@
+name: Reusable Compose Deploy PR
+
+# Bumps an app image tag in the Docker Compose stack (Integrosa/cluster-iac) and opens a PR.
+# Replaces the dead reusable-k8s-deploy-pr.yml (k3s/ArgoCD are gone — stack runs on Docker Compose).
+# Deploy itself stays MANUAL for now: merge this PR, then run `make deploy` from the workstation.
+# (Auto-deploy on merge — SSH to the VPS — can be added later in cluster-iac.)
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: "Application name for the PR title/branch (e.g., 'integrosa')"
+        required: true
+        type: string
+      image_path:
+        description: "Base image path without tag, from the build output docker_image_path (e.g., 'rg.pl-waw.scw.cloud/integrosa/integrosa'). The bump matches this path, so it catches BOTH the app and its *-migrate line (same image, same tag)."
+        required: true
+        type: string
+      version_tag:
+        description: "Version tag to set (e.g., 'v1.2.3')"
+        required: true
+        type: string
+      iac_repository:
+        description: "Infrastructure-as-Code repository to open the PR against"
+        required: false
+        type: string
+        default: "Integrosa/cluster-iac"
+      compose_path:
+        description: "Path to the compose file inside the IaC repo"
+        required: false
+        type: string
+        default: "compose/docker-compose.yml"
+      runs_on:
+        description: "Runner to use (GitHub-hosted)"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+      pr_labels:
+        description: "Comma-separated list of labels to add to the PR"
+        required: false
+        type: string
+        default: "automated,deployment"
+      environment:
+        description: "Deployment environment (for PR title only)"
+        required: false
+        type: string
+        default: "production"
+    secrets:
+      iac_token:
+        description: "GitHub token with write access to the IaC repository (open PRs)"
+        required: true
+
+jobs:
+  bump-and-pr:
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+
+    steps:
+    - name: Validate version tag format
+      env:
+        VERSION_TAG: ${{ inputs.version_tag }}
+      run: |
+        if ! printf '%s' "$VERSION_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "::error::version_tag '$VERSION_TAG' is not in the expected vMAJOR.MINOR.PATCH form" >&2
+          exit 1
+        fi
+
+    - name: Checkout IaC repository
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      with:
+        repository: ${{ inputs.iac_repository }}
+        token: ${{ secrets.iac_token }}
+        path: iac-repo
+
+    - name: Bump image tag in compose
+      env:
+        IMAGE_PATH: ${{ inputs.image_path }}
+        VERSION_TAG: ${{ inputs.version_tag }}
+        COMPOSE_PATH: ${{ inputs.compose_path }}
+      run: |
+        set -euo pipefail
+        file="iac-repo/${COMPOSE_PATH}"
+        if [ ! -f "$file" ]; then
+          echo "::error::compose file not found: $file" >&2
+          exit 1
+        fi
+        # The image path's only regex metachar is '.'; '/' is safe because we use '#' as the sed delimiter.
+        esc=$(printf '%s' "$IMAGE_PATH" | sed 's/\./\\./g')
+        # Replace the semver tag on every line referencing this image — catches both the
+        # app service and its *-migrate one-shot (they share the same image, must stay in lockstep).
+        sed -i -E "s#(${esc}:)v[0-9]+\.[0-9]+\.[0-9]+#\1${VERSION_TAG}#g" "$file"
+        cd iac-repo
+        if git diff --quiet -- "$COMPOSE_PATH"; then
+          echo "::error::no change made — image '$IMAGE_PATH' not found in $COMPOSE_PATH or already at $VERSION_TAG" >&2
+          exit 1
+        fi
+        echo "Bumped $IMAGE_PATH -> $VERSION_TAG. Changed lines:"
+        git diff -- "$COMPOSE_PATH" | grep -E '^\+.*image:' || true
+
+    - name: Create Pull Request
+      uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676  # v7
+      with:
+        path: iac-repo
+        token: ${{ secrets.iac_token }}
+        commit-message: "deploy(${{ inputs.app_name }}): bump image to ${{ inputs.version_tag }}"
+        branch: "deploy/${{ inputs.app_name }}-${{ inputs.version_tag }}"
+        delete-branch: true
+        title: "🚀 Deploy ${{ inputs.app_name }} ${{ inputs.version_tag }} to ${{ inputs.environment }}"
+        labels: ${{ inputs.pr_labels }}
+        body: |
+          ## 🤖 Automated deployment PR
+
+          Bumps the image tag in `${{ inputs.compose_path }}` for **${{ inputs.app_name }}**.
+
+          | | |
+          |---|---|
+          | **Application** | `${{ inputs.app_name }}` |
+          | **Image** | `${{ inputs.image_path }}:${{ inputs.version_tag }}` |
+          | **Version** | `${{ inputs.version_tag }}` |
+          | **Environment** | `${{ inputs.environment }}` |
+          | **Source commit** | [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |
+
+          ### ⚠️ Deploy is manual
+          Merging this PR updates the source of truth only. To roll it out:
+          ```
+          cd compose && make deploy
+          ```
+          For integrosa/pianorama the `*-migrate` line is bumped to the same tag, so the
+          Prisma migration runs against the matching image at deploy time.
+
+          ---
+          🤖 Generated by [Integrosa Reusable Workflows](https://github.com/Integrosa/.github)

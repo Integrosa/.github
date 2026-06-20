@@ -206,7 +206,7 @@ Add section to this README explaining:
    # Uncomment to add deployment
    # deploy:
    #   needs: build
-   #   runs-on: homelab
+   #   runs-on: ubuntu-latest
    ```
 
 4. **Reference stable versions:**
@@ -337,7 +337,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: homelab
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Run tests
@@ -353,7 +353,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: homelab
+    runs-on: ubuntu-latest
     steps:
       - name: Deploy
         run: |

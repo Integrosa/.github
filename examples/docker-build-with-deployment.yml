@@ -13,16 +13,16 @@ jobs:
     with:
       organization_name: "integrosa"
       project_name: "my-app"
-      runs_on: "homelab"
+    secrets: inherit
 
   deploy:
     needs: build
-    uses: Integrosa/.github/.github/workflows/reusable-k8s-deploy-pr.yml@v1
+    uses: Integrosa/.github/.github/workflows/reusable-compose-deploy-pr.yml@v1
     with:
       app_name: "my-app"
-      k8s_namespace: "k3s/apps/my-app"
-      docker_image_path: ${{ needs.build.outputs.docker_image_path }}
-      docker_image_full: ${{ needs.build.outputs.docker_image_full }}
+      # Base image path from the build output — the bump matches this path, so for apps that
+      # also have a *-migrate one-shot (same image) both lines are updated to the same tag.
+      image_path: ${{ needs.build.outputs.docker_image_path }}
       version_tag: ${{ needs.build.outputs.version_tag }}
     secrets:
       iac_token: ${{ secrets.ARGOCD_IAC_UPDATE_TOKEN }}
