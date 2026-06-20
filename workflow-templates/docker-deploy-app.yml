@@ -14,16 +14,15 @@ jobs:
     with:
       organization_name: "integrosa"
       project_name: "$default_branch"  # GitHub replaces this with repo name
-      runs_on: "homelab"
+    secrets: inherit
 
   deploy:
     needs: build
-    uses: Integrosa/.github/.github/workflows/reusable-k8s-deploy-pr.yml@v1
+    uses: Integrosa/.github/.github/workflows/reusable-compose-deploy-pr.yml@v1
     with:
       app_name: "$default_branch"  # GitHub replaces this with repo name
-      k8s_namespace: "k3s/apps/$default_branch"  # Adjust path as needed
-      docker_image_path: ${{ needs.build.outputs.docker_image_path }}
-      docker_image_full: ${{ needs.build.outputs.docker_image_full }}
+      # Base image path from the build output; the bump also catches a matching *-migrate line.
+      image_path: ${{ needs.build.outputs.docker_image_path }}
       version_tag: ${{ needs.build.outputs.version_tag }}
     secrets:
       iac_token: ${{ secrets.ARGOCD_IAC_UPDATE_TOKEN }}

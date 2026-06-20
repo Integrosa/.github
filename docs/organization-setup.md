@@ -155,7 +155,7 @@ on: workflow_dispatch
 
 jobs:
   test:
-    runs-on: homelab
+    runs-on: ubuntu-latest
     steps:
       - name: Test registry login
         run: |

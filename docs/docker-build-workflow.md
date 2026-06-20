@@ -30,7 +30,7 @@ jobs:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `runs_on` | `string` | `"homelab"` | Runner label to use for the build job |
+| `runs_on` | `string` | `"ubuntu-latest"` | Runner label to use for the build job |
 | `tag_prefix` | `string` | `"v"` | Prefix for git tags (e.g., `v1.2.3`) |
 | `major_pattern` | `string` | `"(BREAKING CHANGE:\|!:)"` | Regex pattern for major version bumps |
 | `minor_pattern` | `string` | `"feat:"` | Regex pattern for minor version bumps |
@@ -210,7 +210,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: homelab
+    runs-on: ubuntu-latest
     steps:
       - name: Update Kubernetes deployment
         run: |
@@ -245,7 +245,7 @@ jobs:
 
   deploy:
     needs: [build-api, build-web]
-    runs-on: homelab
+    runs-on: ubuntu-latest
     steps:
       - name: Deploy services
         run: |
