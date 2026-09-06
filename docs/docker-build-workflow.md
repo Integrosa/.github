@@ -49,6 +49,19 @@ All outputs are available to downstream jobs using `needs.<job-id>.outputs.<outp
 | `docker_image_full` | Full Docker image reference with version tag | `rg.fr-par.scw.cloud/integrosa/pianorama:v1.2.3` |
 | `docker_image_path` | Base Docker image path without tag | `rg.fr-par.scw.cloud/integrosa/pianorama` |
 
+## Build argument `APP_VERSION`
+
+The computed release tag is passed to `docker build` as `--build-arg APP_VERSION=vX.Y.Z`.
+Declare it in the Dockerfile to bake the version into the image, e.g. for a footer:
+
+```dockerfile
+ARG APP_VERSION=dev
+ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION   # before the build step
+```
+
+Dockerfiles that do not declare the ARG are unaffected (Docker prints a
+"build-arg not consumed" warning only).
+
 ## Semantic Versioning
 
 The workflow uses **conventional commits** to automatically determine version bumps:

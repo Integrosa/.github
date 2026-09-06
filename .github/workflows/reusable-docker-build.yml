@@ -107,6 +107,11 @@ jobs:
         tags: |
           ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }}
           ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:latest
+        # Expose the release tag to the Dockerfile (`ARG APP_VERSION`) so the
+        # app can show which version is deployed. Dockerfiles that do not
+        # declare the ARG only get a "build-arg not consumed" warning.
+        build-args: |
+          APP_VERSION=${{ steps.semver.outputs.version_tag }}
         # GitHub Actions layer cache — cuts paid runner minutes on incremental builds
         cache-from: type=gha
         cache-to: type=gha,mode=max
