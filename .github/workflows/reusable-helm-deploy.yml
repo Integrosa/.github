@@ -168,6 +168,32 @@ jobs:
           sudo install "$RUNNER_TEMP/linux-amd64/helm" /usr/local/bin/helm
           helm version
 
+      - name: Refuse plain Secrets in the chart
+        # App secrets travel as SealedSecrets (integrosa_platform ADR 0029): a plain Secret would sit in
+        # git in the clear. Best effort before any cluster call, with a clear message: offline rendering
+        # can differ from the install (lookup is empty, .Release.IsInstall is true), so the cluster is
+        # the real gate (policy tenant-secrets-sealed-only, ADR 0033). The SealedSecret API is declared,
+        # so a chart that falls back to a Secret without it renders as it would in the cluster. Counted:
+        # every rendered document (crds/ included: a first install creates them unchecked) and every
+        # element of an `items` list at any depth (Helm's builder flattens any object with items,
+        # recursively: FlattenListVisitor, cli-runtime). A Secret reference inside an object (no
+        # apiVersion v1) is not a manifest.
+        run: |
+          set -euo pipefail
+          # yq v4.54.1 (newest stable, 2026-10-08); sha256 from the release's checksums file.
+          curl -fsSLo "$RUNNER_TEMP/yq" https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
+          echo "8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f  $RUNNER_TEMP/yq" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/yq"
+          names=$(helm template "$RELEASE" "$CHART_PATH" --namespace "$NAMESPACE" --include-crds \
+            --api-versions bitnami.com/v1alpha1 --api-versions bitnami.com/v1alpha1/SealedSecret \
+            --set-string image.repository="$IMAGE_REPOSITORY" --set-string image.digest="$IMAGE_DIGEST" \
+            | "$RUNNER_TEMP/yq" -N '[., (.. | select(tag == "!!map" and (.items | tag) == "!!seq") | .items[])] | .[]
+                | select(tag == "!!map" and .apiVersion == "v1" and .kind == "Secret") | (.metadata.name // "(no name)")')
+          if [ -n "$names" ]; then
+            echo "::error::the chart renders plain Secret(s): $(paste -sd' ' - <<<"$names"); use a SealedSecret (integrosa_platform ADR 0029, 0033)"
+            exit 1
+          fi
+
       - name: Kubeconfig with a fresh OIDC token per use (exec plugin, no token on disk)
         run: |
           set -euo pipefail

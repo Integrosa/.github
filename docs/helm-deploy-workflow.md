@@ -75,23 +75,30 @@ The chart must read `image.repository` and `image.digest` (the workflow sets bot
 1. Checks the inputs (digest format, registry path, DNS names, relative chart directory with a
    `Chart.yaml`).
 2. Installs Helm v4.3.0 and verifies its pinned SHA-256.
-3. Writes a kubeconfig whose user is an exec plugin: every Helm or kubectl process asks GitHub for
+3. Refuses plain Secrets: renders the chart (`helm template` with the deploy values and the
+   SealedSecret API declared and `crds/` included) and fails before any cluster call when a rendered
+   manifest, or an element of an `items` list at any depth (Helm flattens those), is a `v1` `Secret`
+   (hooks included; a reference to a Secret inside another object does not count). App secrets belong in a SealedSecret, sealed with the public certificate in
+   [`sealed-secrets/`](../sealed-secrets/README.md). This is a best-effort early check (offline
+   rendering has no `lookup` and always looks like a first install); the cluster is the real gate:
+   the CI user may write only Helm release Secrets in a tenant namespace (integrosa_platform ADR 0033).
+4. Writes a kubeconfig whose user is an exec plugin: every Helm or kubectl process asks GitHub for
    a fresh OIDC token (audience `integrosa-platform`). The token never lands on disk.
-4. Prints the token's claims (never the token) and, as a non-blocking diagnostic,
+5. Prints the token's claims (never the token) and, as a non-blocking diagnostic,
    `kubectl auth whoami`.
-5. Never deploys an older commit than the last deploy. Every deploy records `deploy <sha>` as the
+6. Never deploys an older commit than the last deploy. Every deploy records `deploy <sha>` as the
    Helm revision description; only revisions that succeeded (`deployed`, `superseded`) count. A run
    deploys only a commit that descends from the last recorded one (GitHub compare API). An older
    commit (slow build, re-run of an old run) is skipped with a warning; the commit that is already
    recorded is not deployed again (notice); both jobs stay green. A diverged history or a failed
    compare fails the job. Runs of one release wait in a queue (`concurrency` with `queue: max`,
    so a waiting run is never cancelled by a later one).
-6. `helm upgrade --install --rollback-on-failure --wait --timeout 5m`: a failed upgrade rolls back
+7. `helm upgrade --install --rollback-on-failure --wait --timeout 5m`: a failed upgrade rolls back
    to the last good release (the rollback gets another 5 minutes), and a failed first install is
    removed. The job has `timeout-minutes: 30`, so it is not killed in the middle of a rollback.
 
 Rolling back a bad version that deployed fine: `helm rollback <release> <revision>` by the platform
-owner, then a revert on `main` (re-running any earlier run does nothing, see step 5).
+owner, then a revert on `main` (re-running any earlier run does nothing, see step 6).
 
 If a run is cancelled while Helm is working, the release can stay in `pending-upgrade`,
 `pending-rollback` or `pending-install`, and Helm then refuses new upgrades ("another operation
