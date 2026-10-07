@@ -38,6 +38,20 @@ Docker Compose stack (`Integrosa/cluster-iac`).
 
 [View Detailed Documentation](docs/compose-deploy-pr-workflow.md)
 
+### ☸️ Helm Deploy Workflow
+
+Deploys an app's Helm chart to the integrosa-platform k3s cluster with a short-lived GitHub OIDC
+token: no cluster credential in GitHub.
+
+**Features:**
+- ✅ Deploys by image digest with `--rollback-on-failure`
+- ✅ Never deploys an older commit than the last deploy; runs of one release never overlap
+- ✅ Helm pinned by checksum, token fetched per use and never written to disk
+
+> ⚠️ Call it as `@main`. The cluster rejects tokens from any other ref of this workflow.
+
+[View Detailed Documentation](docs/helm-deploy-workflow.md)
+
 ## 🚀 Quick Start
 
 ### Option 1: Use Starter Template (Easiest)
@@ -115,7 +129,7 @@ This repository follows semantic versioning. You can reference workflows by:
 
 - **Major version** (recommended): `@v1` - automatically gets latest v1.x.x
 - **Specific version**: `@v1.0.0` - pins to exact version
-- **Branch**: `@main` - uses latest (not recommended for production)
+- **Branch**: `@main` - uses latest (not recommended for production), except `reusable-helm-deploy.yml`, which works only from `@main` (see its documentation)
 
 **Example:**
 ```yaml
@@ -128,6 +142,7 @@ See [Versioning Strategy](docs/versioning-strategy.md) for migration guides and 
 
 - [Docker Build Workflow Documentation](docs/docker-build-workflow.md) - Complete reference
 - [Compose Deploy PR Workflow Documentation](docs/compose-deploy-pr-workflow.md) - Deployment automation
+- [Helm Deploy Workflow Documentation](docs/helm-deploy-workflow.md) - Deploys to the k3s cluster over GitHub OIDC
 - [Organization Setup Guide](docs/organization-setup.md) - Configuration instructions
 - [Versioning Strategy](docs/versioning-strategy.md) - Version management
 - [Workflow Templates Guide](workflow-templates/README.md) - Using starter templates

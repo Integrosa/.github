@@ -59,6 +59,9 @@ on:
       docker_image_path:
         description: "Base Docker image path without tag"
         value: ${{ jobs.build.outputs.docker_image_path }}
+      docker_image_digest:
+        description: "Digest of the pushed image (sha256:...), for deploying by digest"
+        value: ${{ jobs.build.outputs.docker_image_digest }}
 
 jobs:
   build:
@@ -70,6 +73,7 @@ jobs:
       version_tag: ${{ steps.semver.outputs.version_tag }}
       docker_image_full: ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }}
       docker_image_path: ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}
+      docker_image_digest: ${{ steps.build.outputs.digest }}
 
     steps:
     - name: Checkout code
@@ -99,6 +103,7 @@ jobs:
         password: ${{ secrets.REGISTRY_TOKEN }}
 
     - name: Build and push
+      id: build
       uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
       with:
         context: ${{ inputs.docker_context }}
