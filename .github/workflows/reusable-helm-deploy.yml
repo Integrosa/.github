@@ -1,0 +1,248 @@
+name: Reusable Helm deploy (integrosa-platform, GitHub OIDC)
+
+# Deploys a chart from the calling repo to the k3s cluster with a short-lived GitHub OIDC token
+# (integrosa_platform ADR 0030): no cluster secret in GitHub. The cluster accepts the token only from
+# this file on main of Integrosa/.github (job_workflow_ref), so callers use @main, never a tag or SHA,
+# and only for push/workflow_dispatch runs on main of repos the tenant's RoleBinding names.
+# The caller job must grant permissions: {id-token: write, contents: read}.
+# The API address and CA are fixed here, not inputs: a caller must not be able to send a token the
+# cluster accepts to another host. CA rotation (integrosa_platform docs/runbooks/host.md) updates them.
+on:
+  workflow_call:
+    inputs:
+      release:
+        description: "Helm release name"
+        required: true
+        type: string
+      namespace:
+        description: "Tenant namespace"
+        required: true
+        type: string
+      chart_path:
+        description: "Chart directory in the calling repo (relative path)"
+        required: true
+        type: string
+      image_repository:
+        description: "Image without tag (docker_image_path of reusable-docker-build)"
+        required: true
+        type: string
+      image_digest:
+        description: "sha256:... (docker_image_digest of reusable-docker-build)"
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Helm gets 5m for the upgrade and, on failure, 5m again for the rollback (rollin.Timeout =
+    # u.Timeout, pkg/action/upgrade.go @ v4.3.0); a job killed mid-rollback leaves the release pending.
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+    # Two runs must not upgrade the same release at once (Helm refuses: another operation in progress).
+    # queue: max keeps every waiting run; the default cancels a pending run (possibly the newer commit)
+    # when another one queues (docs.github.com, concurrency; github/docs actions-group-concurrency.md).
+    concurrency:
+      group: helm-deploy/${{ inputs.namespace }}/${{ inputs.release }}
+      cancel-in-progress: false
+      queue: max
+    env:
+      RELEASE: ${{ inputs.release }}
+      NAMESPACE: ${{ inputs.namespace }}
+      CHART_PATH: ${{ inputs.chart_path }}
+      IMAGE_REPOSITORY: ${{ inputs.image_repository }}
+      IMAGE_DIGEST: ${{ inputs.image_digest }}
+      API_SERVER: https://194.163.128.14:6443
+      # k3s server CA (CN=k3s-server-ca@1791238499, valid until 2036-11-21; sha256
+      # 4C:F3:3A:BB:A1:F3:14:66:ED:0E:7B:D4:5D:7C:72:C6:F3:7F:12:27:AA:8A:58:98:73:04:AC:7F:20:C1:FB:1F).
+      API_CA: |
+          -----BEGIN CERTIFICATE-----
+          MIIDZjCCAU6gAwIBAgIIZT1af2TkyG8wDQYJKoZIhvcNAQELBQAwKTEnMCUGA1UE
+          AwweazNzLWludGVybWVkaWF0ZS1jYUAxNzkxMjM4NDk5MB4XDTI2MTAwNTIyMTUw
+          MFoXDTM2MTEyMTIyMTUwMFowIzEhMB8GA1UEAwwYazNzLXNlcnZlci1jYUAxNzkx
+          MjM4NDk5MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5sHqAVp6HT4CcBsuHEiu
+          5RgrxCPaFhWu3IJ2Grba/2abcxU24oY3jhOD9riheR9QMgNw4KK5Lg8s9vvNXbXX
+          +qNjMGEwHQYDVR0OBBYEFEpFBlDLt2t0Xy0Zmi0/Dn0MUsb4MB8GA1UdIwQYMBaA
+          FPiD3WAn/ozR0D0kZgbO/MTJRHdGMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/
+          BAQDAgKkMA0GCSqGSIb3DQEBCwUAA4ICAQB88/fEw5qYwtE7PzSM70BWloq4j2wG
+          GPwFTBr+XrQrzCAKDLkym6XA8ybUH9eiSGWTfGfcK13T9hTbgzkkzePxYELf74if
+          Tbkmvn9pbyexsjDsEZpX3Yn39UAOoXb99JkYw6fxyhk5OugutxhloGQ2JTQ3G7w/
+          HFr6vg8DYudg0PG848Nmw9I5TY6o/pS//oNsnXXjzYwjZegu0MmgFPdxxcgvP6Kq
+          MZZWnOFFwne1w519c9rvtslud7O/krGrujQypHJJmi3yT1RuITVed+oL3u68YAn9
+          xxWKN+qkef/7prpb0SLzjeOwR2Iy0Fguz/KWAbPw9zVSVe3ubMxl53e+siOvcHaH
+          3c0UJdBCpPTMYjaIFEvI3oY2s8UnPWnBeHHaMmXPPDYEwUVHYjugfW/h6oHQww+W
+          kJdycDupvp54L2PZReFeSfNE5hJIO55p+/RKnsfOnEbP1DANvczuMu5xtoajeM/q
+          nzTyd5yTnJRKt1KUAeVAXvjjDb9y9p9u8BOkhcxYFGO6ADa3UCHcYWVqEugUhU7H
+          GI5mmyEJnzw1Qx3NTS10C3Iew5gUXoLXbweVo45VmWXtN8/Hz5R+cQdN+O1AtZ6n
+          xDrebGicq3WoAiQcoPe9J7DvYne2s4kmegzp5RDYD66rIUBX+YKVVySBDibMurpz
+          YVZrxtG5GaSYCw==
+          -----END CERTIFICATE-----
+          -----BEGIN CERTIFICATE-----
+          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
+          -----END CERTIFICATE-----
+          -----BEGIN CERTIFICATE-----
+          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
+          -----END CERTIFICATE-----
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check inputs
+        run: |
+          set -euo pipefail
+          # Strict shapes: --set-string splits on "," and "="; chart_path is a directory of the caller and
+          # no segment starts with "-" (Helm would read it as a flag). Repository grammar: distribution/reference.
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "image_digest must be sha256:<64 hex>" >&2; exit 1; }
+          [[ "$IMAGE_REPOSITORY" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)+$ ]] \
+            || { echo "image_repository must be a registry path without tag or digest" >&2; exit 1; }
+          [[ "$NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || { echo "namespace is not a DNS label" >&2; exit 1; }
+          [[ "$RELEASE" =~ ^[a-z0-9]([-a-z0-9]{0,51}[a-z0-9])?$ ]] || { echo "release is not a valid Helm release name" >&2; exit 1; }
+          [[ "$CHART_PATH" =~ ^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$ && ! "/$CHART_PATH/" =~ /\.\.?/ ]] \
+            || { echo "chart_path must be a relative directory inside the repo" >&2; exit 1; }
+          [ -f "$CHART_PATH/Chart.yaml" ] || { echo "no Chart.yaml in $CHART_PATH" >&2; exit 1; }
+
+      - name: Install Helm v4.3.0 (pinned checksum)
+        run: |
+          set -euo pipefail
+          # sha256 from the v4.3.0 release notes on GitHub and get.helm.sh (2026-10-07).
+          curl -fsSLo "$RUNNER_TEMP/helm.tgz" https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
+          echo "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  $RUNNER_TEMP/helm.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/helm.tgz" -C "$RUNNER_TEMP" linux-amd64/helm
+          sudo install "$RUNNER_TEMP/linux-amd64/helm" /usr/local/bin/helm
+          helm version
+
+      - name: Kubeconfig with a fresh OIDC token per use (exec plugin, no token on disk)
+        run: |
+          set -euo pipefail
+          kube="$RUNNER_TEMP/kube"
+          mkdir -p "$kube"
+          cat > "$kube/token.sh" <<'EOF'
+          #!/usr/bin/env bash
+          # Prints an ExecCredential with a new GitHub OIDC token (audience integrosa-platform); client-go
+          # asks again after expirationTimestamp. Tokens travel through pipes, never argv.
+          set -euo pipefail
+          tok=$(curl -fsS -H @<(printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN") \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=integrosa-platform" | jq -r .value)
+          printf '%s' "$tok" | jq -Rc '. as $t | split(".")[1] | gsub("-"; "+") | gsub("_"; "/")
+            | . + ("=" * ((4 - length % 4) % 4)) | @base64d | fromjson
+            | {apiVersion: "client.authentication.k8s.io/v1", kind: "ExecCredential",
+               status: {token: $t, expirationTimestamp: (.exp - 30 | todate)}}'
+          EOF
+          chmod 0700 "$kube/token.sh"
+          # Written directly (not with kubectl config, which stores paths relative to the kubeconfig).
+          printf '%s' "$API_CA" | base64 | tr -d '\n' \
+            | jq -Rn --arg server "$API_SERVER" --arg cmd "$kube/token.sh" --arg ns "$NAMESPACE" '{
+                apiVersion: "v1", kind: "Config", "current-context": "deploy",
+                clusters: [{name: "k3s", cluster: {server: $server, "certificate-authority-data": input}}],
+                users: [{name: "github", user: {exec: {apiVersion: "client.authentication.k8s.io/v1",
+                  command: $cmd, interactiveMode: "Never"}}}],
+                contexts: [{name: "deploy", context: {cluster: "k3s", user: "github", namespace: $ns}}]}' \
+            > "$kube/config"
+          echo "KUBECONFIG=$kube/config" >> "$GITHUB_ENV"
+
+      - name: Who am I (claims only, never the token)
+        run: |
+          set -euo pipefail
+          tok=$("$RUNNER_TEMP/kube/token.sh" | jq -r .status.token)
+          echo "::add-mask::$tok"
+          printf '%s' "$tok" | cut -d. -f2 | jq -Rr 'gsub("-"; "+") | gsub("_"; "/") | . + ("=" * ((4 - length % 4) % 4))
+            | @base64d | fromjson | {repository_owner_id, repository_id, ref, event_name, job_workflow_ref, aud, lifetime_s: (.exp - .iat)}'
+          unset tok
+          # Diagnostic only (the runner image's kubectl): never blocks the deploy.
+          kubectl auth whoami || echo "::warning::kubectl auth whoami failed"
+
+      - name: Deploy (never an older commit than the last deploy)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Runs wait in a queue but may arrive out of order (a slow build, a re-run of an old run). Each
+          # deploy records "deploy <sha>" as the revision description; only revisions that succeeded
+          # (deployed, superseded) count. A run deploys only a commit that descends from the last one.
+          runbook="integrosa_platform docs/runbooks/platform.md, Wdrożenie aplikacji z CI: sytuacje kryzysowe"
+          if hist=$(helm history "$RELEASE" --namespace "$NAMESPACE" --max 50 -o json 2>"$RUNNER_TEMP/hist.err"); then
+            last=$(printf '%s' "$hist" | jq -r '[.[] | select(.status == "deployed" or .status == "superseded")
+              | select(.description | test("^deploy [0-9a-f]{40}$"))] | sort_by(.revision) | last | .description // "" | ltrimstr("deploy ")')
+            [ -n "$last" ] || echo "::warning::release $RELEASE has no successful 'deploy <sha>' revision: no order check this time"
+          elif grep -q 'release: not found' "$RUNNER_TEMP/hist.err"; then
+            last=
+          else
+            cat "$RUNNER_TEMP/hist.err" >&2; exit 1
+          fi
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "::notice::$GITHUB_SHA is already deployed (a re-run does not redeploy; see $runbook)"
+            exit 0
+          fi
+          if [ -n "$last" ]; then
+            order=$(gh api "repos/$GITHUB_REPOSITORY/compare/$last...$GITHUB_SHA?per_page=1" --jq .status) \
+              || { echo "::error::cannot compare the deployed $last with $GITHUB_SHA: $runbook"; exit 1; }
+            case "$order" in
+              ahead) ;;
+              behind) echo "::warning::$GITHUB_SHA is older than the deployed $last: not deploying"; exit 0 ;;
+              *) echo "::error::$GITHUB_SHA and the deployed $last are $order: $runbook"; exit 1 ;;
+            esac
+          fi
+          helm upgrade --install "$RELEASE" "$CHART_PATH" \
+            --namespace "$NAMESPACE" \
+            --set-string image.repository="$IMAGE_REPOSITORY" \
+            --set-string image.digest="$IMAGE_DIGEST" \
+            --description "deploy $GITHUB_SHA" \
+            --rollback-on-failure --wait --timeout 5m
+          helm history "$RELEASE" --namespace "$NAMESPACE" --max 3

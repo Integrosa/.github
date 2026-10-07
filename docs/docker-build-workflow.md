@@ -48,6 +48,7 @@ All outputs are available to downstream jobs using `needs.<job-id>.outputs.<outp
 | `version_tag` | Version with tag prefix | `v1.2.3` |
 | `docker_image_full` | Full Docker image reference with version tag | `rg.fr-par.scw.cloud/integrosa/pianorama:v1.2.3` |
 | `docker_image_path` | Base Docker image path without tag | `rg.fr-par.scw.cloud/integrosa/pianorama` |
+| `docker_image_digest` | Digest of the pushed image, for deploying by digest | `sha256:4f1c…` |
 
 ## Build argument `APP_VERSION`
 
