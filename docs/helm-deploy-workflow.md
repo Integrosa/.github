@@ -64,16 +64,54 @@ to send a token the cluster accepts to another host. Rotating the cluster CA mea
 | `release` | yes | – | Helm release name |
 | `namespace` | yes | – | Tenant namespace |
 | `chart_path` | yes | – | Chart subdirectory of the calling repository, e.g. `deploy/chart` (not the repository root; must contain `Chart.yaml`; chart dependencies must be vendored in its `charts/`, the workflow does not run `helm dependency build`) |
-| `image_repository` | yes | – | Image without tag, the build's `docker_image_path` output |
-| `image_digest` | yes | – | `sha256:...`, the build's `docker_image_digest` output |
+| `image_repository` | one image | `""` | Image without tag, the build's `docker_image_path` output |
+| `image_digest` | one image | `""` | `sha256:...`, the build's `docker_image_digest` output |
+| `images` | several images | `""` | JSON `{"<name>": {"repository": "...", "digest": "sha256:..."}}`, 1-10 entries, name `^[a-z][a-zA-Z0-9]{0,30}$`; instead of `image_repository`/`image_digest`, never both |
+| `timeout` | no | `5m` | Helm `--timeout`, `1m`-`10m`; it applies to each hook and to the wait separately, in the upgrade and again in a rollback |
 
-The chart must read `image.repository` and `image.digest` (the workflow sets both with
-`--set-string`) and reference the image as `repository@digest`.
+With one image the chart must read `image.repository` and `image.digest` (the workflow sets both
+with `--set-string`) and reference the image as `repository@digest`.
+
+### Several images
+
+An app made of several images (a backend, a shop, a helper service) passes them all at once, each by
+digest, whether it was built in this run or not. The digests must be read after the build (a job
+that needs `build` asks the registry for every image's digest); a job before the build would pin the
+previous image of an app it is about to rebuild. When nothing was built, `build` is skipped, so the
+`digests` and `deploy` need an `if:` that lets a skipped build through but nothing else (a failed or
+cancelled build would deploy the previous digests under the new commit). Run the whole caller
+workflow in one `concurrency` group with `cancel-in-progress: false`: digests read for images that
+were not rebuilt must come after the previous run's build, or a newer commit can pin an older image.
+
+```yaml
+  deploy:
+    needs: [plan, build, digests]
+    # digests: if: ${{ !cancelled() && needs.plan.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.build.result) }}
+    if: ${{ !cancelled() && contains(fromJSON('["success", "skipped"]'), needs.build.result) && needs.digests.result == 'success' }}
+    permissions:
+      id-token: write
+      contents: read
+    uses: Integrosa/.github/.github/workflows/reusable-helm-deploy.yml@main
+    with:
+      release: medusa
+      namespace: b3net-staging
+      chart_path: infra/chart
+      images: ${{ needs.digests.outputs.images_json }}  # {"backend": {"repository": ..., "digest": ...}, ...}
+      timeout: 10m
+```
+
+The workflow sets `images.<name>.repository` and `images.<name>.digest`, so the chart references
+`{{ .Values.images.backend.repository }}@{{ .Values.images.backend.digest }}`. Names have no dots,
+commas or dashes, because `--set-string` would split or nest on them and Go templates read
+`.Values.images.<name>` only for plain identifiers. Helm changes only the Deployments whose digest
+changed. `tests/helm-deploy-inputs.sh` runs the input checks against good and bad values (workflow
+`Test` on every pull request).
 
 ## What it does
 
 1. Checks the inputs (digest format, registry path, DNS names, relative chart directory with a
-   `Chart.yaml`).
+   `Chart.yaml`, the `images` JSON shape, `timeout`) and writes the `--set-string` arguments used by
+   steps 3 and 7.
 2. Installs Helm v4.3.0 and verifies its pinned SHA-256.
 3. Refuses plain Secrets: renders the chart (`helm template` with the deploy values and the
    SealedSecret API declared and `crds/` included) and fails before any cluster call when a rendered
@@ -93,9 +131,12 @@ The chart must read `image.repository` and `image.digest` (the workflow sets bot
    recorded is not deployed again (notice); both jobs stay green. A diverged history or a failed
    compare fails the job. Runs of one release wait in a queue (`concurrency` with `queue: max`,
    so a waiting run is never cancelled by a later one).
-7. `helm upgrade --install --rollback-on-failure --wait --timeout 5m`: a failed upgrade rolls back
-   to the last good release (the rollback gets another 5 minutes), and a failed first install is
-   removed. The job has `timeout-minutes: 30`, so it is not killed in the middle of a rollback.
+7. `helm upgrade --install --rollback-on-failure --wait --timeout <timeout>` (default 5m): a failed
+   upgrade rolls back to the last good release, and a failed first install is removed. Helm applies
+   the timeout to each hook and to the wait separately, in the upgrade and again in the rollback: a
+   chart with one pre-upgrade hook and no rollback hooks needs at most 4 x timeout. The job has
+   `timeout-minutes: 45` (4 x 10m plus setup), so it is not killed in the middle of a rollback; a chart
+   with more hooks needs a shorter timeout.
 
 Rolling back a bad version that deployed fine: `helm rollback <release> <revision>` by the platform
 owner, then a revert on `main` (re-running any earlier run does nothing, see step 6).
