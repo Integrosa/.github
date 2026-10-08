@@ -33,7 +33,7 @@ on:
         type: string
         default: ""
       images:
-        description: 'Several images: JSON {"<name>": {"repository": "...", "digest": "sha256:..."}}, set as images.<name>.repository and images.<name>.digest; name ^[a-z][a-zA-Z0-9]{0,30}$, 1-10 images'
+        description: 'Several images as JSON {"<name>": {"repository": ..., "digest": ...}}; shape and limits: docs/helm-deploy-workflow.md'
         required: false
         type: string
         default: ""
@@ -172,6 +172,7 @@ jobs:
           repo_body='[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)+'
           digest_body='sha256:[0-9a-f]{64}'
           name_body='[a-z][a-zA-Z0-9]{0,30}'
+          max_images=10
           [[ "$NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || { echo "namespace is not a DNS label" >&2; exit 1; }
           [[ "$RELEASE" =~ ^[a-z0-9]([-a-z0-9]{0,51}[a-z0-9])?$ ]] || { echo "release is not a valid Helm release name" >&2; exit 1; }
           [[ "$CHART_PATH" =~ ^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$ && ! "/$CHART_PATH/" =~ /\.\.?/ ]] \
@@ -182,10 +183,10 @@ jobs:
             [ -z "$IMAGE_REPOSITORY$IMAGE_DIGEST" ] || { echo "use images or image_repository/image_digest, not both" >&2; exit 1; }
             # One jq program reads exactly one JSON value, validates it and emits the arguments, so they are
             # exactly the validated strings; the error names the entry that failed.
-            jq -rn --arg rr "$repo_body" --arg dr "$digest_body" --arg nr "$name_body" '
+            jq -rn --arg rr "$repo_body" --arg dr "$digest_body" --arg nr "$name_body" --argjson max "$max_images" '
               def whole($re): type == "string" and test("\\A(" + $re + ")\\z");
               [inputs] | if length != 1 then error("images must be exactly one JSON object") else .[0] end
-              | if type != "object" or length < 1 or length > 10 then error("images must be an object with 1-10 entries") else . end
+              | if type != "object" or length < 1 or length > $max then error("images must be an object with 1-\($max) entries") else . end
               | to_entries[]
               | if (.key | whole($nr)) | not then error("image name \(.key | tojson) must match ^\($nr)$")
                 elif (.value | type) != "object" or (.value | keys) != ["digest", "repository"] then error("image \(.key): exactly repository and digest")

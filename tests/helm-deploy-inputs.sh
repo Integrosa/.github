@@ -64,6 +64,9 @@ IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D CP=/chart run 1 "absolute chart pa
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D CP=missing run 1 "chart path without Chart.yaml"
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D NS='Bad_NS' run 1 "namespace not a DNS label"
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D REL='-x' run 1 "release starting with -"
+# The docs table states the rules the step enforces (the input description points to the docs).
+nb=$(sed -n "s/^ *name_body='\(.*\)'$/\1/p" <<<"$script"); mx=$(sed -n 's/^ *max_images=\([0-9]*\)$/\1/p' <<<"$script")
+if [ -n "$nb" ] && [ -n "$mx" ] && grep -qF "1-$mx entries, name \`^$nb\$\`" docs/helm-deploy-workflow.md; then echo "ok   docs state the step's image rules"; else echo "FAIL docs and step disagree on the image rules (name '$nb', max '$mx')"; fail=1; fi
 # The test workflow must use the yq the deploy job pins (same URL and checksum).
 pin() { grep -oE 'yq/releases/download/v[0-9.]+/yq_linux_amd64|[0-9a-f]{64}  \$RUNNER_TEMP/(bin/)?yq' "$1" | sed 's#  .*##' | sort; }
 if [ -n "$(pin "$wf")" ] && [ "$(pin "$wf")" = "$(pin .github/workflows/test.yml)" ]; then echo "ok   test workflow pins the deploy job's yq"; else echo "FAIL test workflow and deploy job pin different yq"; fail=1; fi
