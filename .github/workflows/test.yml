@@ -1,0 +1,28 @@
+# Tests of the reusable workflows that run without a cluster or registry.
+name: Test
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  helm-deploy-inputs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # The same yq as reusable-helm-deploy (v4.54.1, sha256 from the release's checksums file), first on
+      # PATH. jq is the runner's, on purpose: the deploy job validates with the runner's jq too, so the
+      # test follows ubuntu-latest exactly as production does.
+      - name: Install yq v4.54.1 (pinned checksum)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/yq" https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
+          echo "8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f  $RUNNER_TEMP/bin/yq" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bin/yq"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: tests/helm-deploy-inputs.sh

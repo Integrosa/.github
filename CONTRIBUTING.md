@@ -278,6 +278,14 @@ steps:
 
 ## Testing Guidelines
 
+### Automated tests
+
+`tests/helm-deploy-inputs.sh` runs the "Check inputs" step of `reusable-helm-deploy.yml` against good
+and bad inputs (old single-image interface, `images`, `timeout`) and checks the `--set-string`
+arguments it writes. It needs bash, jq and yq v4 (mikefarah) and runs locally as is; the `Test`
+workflow runs it on every pull request with the yq version the deploy job pins. Change the step and
+the test together.
+
 ### Manual Testing
 
 1. **Create test repository:**

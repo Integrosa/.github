@@ -23,20 +23,35 @@ on:
         required: true
         type: string
       image_repository:
-        description: "Image without tag (docker_image_path of reusable-docker-build)"
-        required: true
+        description: "Image without tag (docker_image_path of reusable-docker-build); one image, or use images"
+        required: false
         type: string
+        default: ""
       image_digest:
-        description: "sha256:... (docker_image_digest of reusable-docker-build)"
-        required: true
+        description: "sha256:... (docker_image_digest of reusable-docker-build); with image_repository"
+        required: false
         type: string
+        default: ""
+      images:
+        description: 'Several images as JSON {"<name>": {"repository": ..., "digest": ...}}; shape and limits: docs/helm-deploy-workflow.md'
+        required: false
+        type: string
+        default: ""
+      timeout:
+        description: "Helm --timeout, 1m-10m: applies to each hook and to the wait separately, in the upgrade and again in a rollback"
+        required: false
+        type: string
+        default: "5m"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Helm gets 5m for the upgrade and, on failure, 5m again for the rollback (rollin.Timeout =
-    # u.Timeout, pkg/action/upgrade.go @ v4.3.0); a job killed mid-rollback leaves the release pending.
-    timeout-minutes: 30
+    # Helm's --timeout applies to every operation on its own: each pre/post hook and the wait
+    # (pkg/action/upgrade.go, hooks.go @ v4.3.0), and a rollback repeats that (rollin.Timeout = u.Timeout).
+    # One pre-upgrade and one post-upgrade hook resource, no rollback hooks: pre hook, wait, post hook and
+    # the rollback's wait, at most 4 x timeout (each hook resource is waited for on its own). A job killed mid-rollback leaves the
+    # release pending, so timeout is capped at 10m and the job allows 4 x 10m plus setup.
+    timeout-minutes: 45
     permissions:
       id-token: write
       contents: read
@@ -53,6 +68,8 @@ jobs:
       CHART_PATH: ${{ inputs.chart_path }}
       IMAGE_REPOSITORY: ${{ inputs.image_repository }}
       IMAGE_DIGEST: ${{ inputs.image_digest }}
+      IMAGES: ${{ inputs.images }}
+      TIMEOUT: ${{ inputs.timeout }}
       API_SERVER: https://194.163.128.14:6443
       # k3s server CA (CN=k3s-server-ca@1791238499, valid until 2036-11-21; sha256
       # 4C:F3:3A:BB:A1:F3:14:66:ED:0E:7B:D4:5D:7C:72:C6:F3:7F:12:27:AA:8A:58:98:73:04:AC:7F:20:C1:FB:1F).
@@ -147,16 +164,42 @@ jobs:
       - name: Check inputs
         run: |
           set -euo pipefail
-          # Strict shapes: --set-string splits on "," and "="; chart_path is a directory of the caller and
-          # no segment starts with "-" (Helm would read it as a flag). Repository grammar: distribution/reference.
-          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "image_digest must be sha256:<64 hex>" >&2; exit 1; }
-          [[ "$IMAGE_REPOSITORY" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)+$ ]] \
-            || { echo "image_repository must be a registry path without tag or digest" >&2; exit 1; }
+          # Strict shapes: --set-string splits on "," and "=" and nests on "."; chart_path is a directory of
+          # the caller and no segment starts with "-" (Helm would read it as a flag). Repository grammar:
+          # distribution/reference. The --set-string arguments go to $RUNNER_TEMP/set-args, one per line,
+          # for helm template and helm upgrade alike (tests/helm-deploy-inputs.sh runs this step).
+          # Unanchored bodies, anchored where used: ^...$ in bash, \A...\z in jq (Oniguruma's $ also matches
+          # before a trailing newline).
+          repo_body='[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)+'
+          digest_body='sha256:[0-9a-f]{64}'
+          name_body='[a-z][a-zA-Z0-9]{0,30}'
+          max_images=10
           [[ "$NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || { echo "namespace is not a DNS label" >&2; exit 1; }
           [[ "$RELEASE" =~ ^[a-z0-9]([-a-z0-9]{0,51}[a-z0-9])?$ ]] || { echo "release is not a valid Helm release name" >&2; exit 1; }
           [[ "$CHART_PATH" =~ ^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$ && ! "/$CHART_PATH/" =~ /\.\.?/ ]] \
             || { echo "chart_path must be a relative directory inside the repo" >&2; exit 1; }
           [ -f "$CHART_PATH/Chart.yaml" ] || { echo "no Chart.yaml in $CHART_PATH" >&2; exit 1; }
+          [[ "$TIMEOUT" =~ ^([1-9]|10)m$ ]] || { echo "timeout must be 1m-10m" >&2; exit 1; }
+          if [ -n "$IMAGES" ]; then
+            [ -z "$IMAGE_REPOSITORY$IMAGE_DIGEST" ] || { echo "use images or image_repository/image_digest, not both" >&2; exit 1; }
+            # One jq program reads exactly one JSON value, validates it and emits the arguments, so they are
+            # exactly the validated strings; the error names the entry that failed.
+            jq -rn --arg rr "$repo_body" --arg dr "$digest_body" --arg nr "$name_body" --argjson max "$max_images" '
+              def whole($re): type == "string" and test("\\A(" + $re + ")\\z");
+              [inputs] | if length != 1 then error("images must be exactly one JSON object") else .[0] end
+              | if type != "object" or length < 1 or length > $max then error("images must be an object with 1-\($max) entries") else . end
+              | to_entries[]
+              | if (.key | whole($nr)) | not then error("image name \(.key | tojson) must match ^\($nr)$")
+                elif (.value | type) != "object" or (.value | keys) != ["digest", "repository"] then error("image \(.key): exactly repository and digest")
+                elif (.value.repository | whole($rr)) | not then error("image \(.key): repository must be a registry path without tag or digest")
+                elif (.value.digest | whole($dr)) | not then error("image \(.key): digest must be sha256:<64 hex>")
+                else "--set-string", "images.\(.key).repository=\(.value.repository)",
+                     "--set-string", "images.\(.key).digest=\(.value.digest)" end' <<<"$IMAGES" > "$RUNNER_TEMP/set-args"
+          else
+            [[ "$IMAGE_DIGEST" =~ ^($digest_body)$ ]] || { echo "image_digest must be sha256:<64 hex> (or use images)" >&2; exit 1; }
+            [[ "$IMAGE_REPOSITORY" =~ ^($repo_body)$ ]] || { echo "image_repository must be a registry path without tag or digest" >&2; exit 1; }
+            printf '%s\n' --set-string "image.repository=$IMAGE_REPOSITORY" --set-string "image.digest=$IMAGE_DIGEST" > "$RUNNER_TEMP/set-args"
+          fi
 
       - name: Install Helm v4.3.0 (pinned checksum)
         run: |
@@ -184,9 +227,10 @@ jobs:
           curl -fsSLo "$RUNNER_TEMP/yq" https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
           echo "8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f  $RUNNER_TEMP/yq" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/yq"
+          mapfile -t set_args < "$RUNNER_TEMP/set-args"
           names=$(helm template "$RELEASE" "$CHART_PATH" --namespace "$NAMESPACE" --include-crds \
             --api-versions bitnami.com/v1alpha1 --api-versions bitnami.com/v1alpha1/SealedSecret \
-            --set-string image.repository="$IMAGE_REPOSITORY" --set-string image.digest="$IMAGE_DIGEST" \
+            "${set_args[@]}" \
             | "$RUNNER_TEMP/yq" -N '[., (.. | select(tag == "!!map" and (.items | tag) == "!!seq") | .items[])] | .[]
                 | select(tag == "!!map" and .apiVersion == "v1" and .kind == "Secret") | (.metadata.name // "(no name)")')
           if [ -n "$names" ]; then
@@ -265,10 +309,10 @@ jobs:
               *) echo "::error::$GITHUB_SHA and the deployed $last are $order: $runbook"; exit 1 ;;
             esac
           fi
+          mapfile -t set_args < "$RUNNER_TEMP/set-args"
           helm upgrade --install "$RELEASE" "$CHART_PATH" \
             --namespace "$NAMESPACE" \
-            --set-string image.repository="$IMAGE_REPOSITORY" \
-            --set-string image.digest="$IMAGE_DIGEST" \
+            "${set_args[@]}" \
             --description "deploy $GITHUB_SHA" \
-            --rollback-on-failure --wait --timeout 5m
+            --rollback-on-failure --wait --timeout "$TIMEOUT"
           helm history "$RELEASE" --namespace "$NAMESPACE" --max 3
