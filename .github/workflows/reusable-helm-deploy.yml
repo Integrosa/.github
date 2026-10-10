@@ -48,7 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     # Helm's --timeout applies to every operation on its own: each pre/post hook and the wait
     # (pkg/action/upgrade.go, hooks.go @ v4.3.0), and a rollback repeats that (rollin.Timeout = u.Timeout).
-    # One pre-upgrade hook, no rollback hooks: at most 4 x timeout. A job killed mid-rollback leaves the
+    # One pre-upgrade and one post-upgrade hook resource, no rollback hooks: pre hook, wait, post hook and
+    # the rollback's wait, at most 4 x timeout (each hook resource is waited for on its own). A job killed mid-rollback leaves the
     # release pending, so timeout is capped at 10m and the job allows 4 x 10m plus setup.
     timeout-minutes: 45
     permissions:

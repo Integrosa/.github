@@ -134,7 +134,9 @@ changed. `tests/helm-deploy-inputs.sh` runs the input checks against good and ba
 7. `helm upgrade --install --rollback-on-failure --wait --timeout <timeout>` (default 5m): a failed
    upgrade rolls back to the last good release, and a failed first install is removed. Helm applies
    the timeout to each hook and to the wait separately, in the upgrade and again in the rollback: a
-   chart with one pre-upgrade hook and no rollback hooks needs at most 4 x timeout. The job has
+   chart with one pre-upgrade hook resource, at most one post-upgrade hook resource and no rollback hooks needs at
+   most 4 x timeout (pre hook, wait, post hook, then the rollback's wait; `pkg/action/upgrade.go` lines 460, 483,
+   508, 589 @ v4.3.0). Helm waits for each hook resource on its own, so the count is of hook resources, not phases. The job has
    `timeout-minutes: 45` (4 x 10m plus setup), so it is not killed in the middle of a rollback; a chart
    with more hooks needs a shorter timeout.
 
