@@ -17,6 +17,10 @@ Example: `v1.2.3`
 
 ## Git Tags
 
+Tags are created by the release workflow on every push to `main` (`.github/workflows/release.yml`,
+[release-workflow.md](release-workflow.md)): the pull request's conventional title decides the bump,
+and `v1` moves to each `v1.x.y`. Nothing is tagged by hand.
+
 Workflows can be referenced by version tags:
 
 ### Major Version Tags (Recommended)
@@ -79,48 +83,17 @@ When modifying workflows:
 4. Create pull request
 5. Review and merge to `main`
 
-### 2. Creating Releases
+### 2. Releases are automatic
 
-After merging changes:
+Merging to `main` is the release. Once the `Test` workflow passes on the merged commit, `Release`
+(`.github/workflows/release.yml`, [release-workflow.md](release-workflow.md)) reads the conventional
+commit subjects since the last tag and, when they call for it, creates the annotated tag (`v1.2.4`,
+`v1.3.0`, `v2.0.0`), moves the major pointer (`v1`, or starts `v2`) and publishes the GitHub release
+with the changelog. The pull request's title (or the single commit's subject) decides: `fix:` patch,
+`feat:` minor, `feat!:` or a `BREAKING CHANGE:` footer major; `docs:`, `ci:`, `chore:` none.
 
-**For Patch Releases (Bug fixes):**
-```bash
-git tag -a v1.2.4 -m "Fix: resolve Docker cleanup issue"
-git push origin v1.2.4
-
-# Update major version pointer
-git tag -fa v1 -m "Update v1 to v1.2.4"
-git push origin v1 --force
-```
-
-**For Minor Releases (New features):**
-```bash
-git tag -a v1.3.0 -m "Add: support for multi-arch builds"
-git push origin v1.3.0
-
-# Update major version pointer
-git tag -fa v1 -m "Update v1 to v1.3.0"
-git push origin v1 --force
-```
-
-**For Major Releases (Breaking changes):**
-```bash
-git tag -a v2.0.0 -m "Breaking: redesign workflow inputs"
-git push origin v2.0.0
-
-# Create new major version pointer
-git tag -a v2 -m "Major release v2.0.0"
-git push origin v2
-```
-
-### 3. GitHub Release
-
-Create a GitHub Release for each version:
-
-1. Go to repository → Releases → "Create a new release"
-2. Choose tag (e.g., `v1.2.3`)
-3. Write release notes (see template below)
-4. Publish release
+Nothing is tagged by hand: a hand-made tag is a version the workflow then skips or collides with.
+A release that stopped halfway is finished with "Re-run failed jobs" on its run.
 
 ## Release Notes Template
 
@@ -182,10 +155,8 @@ Changes that require users to modify their workflows:
    - List all affected workflows
    - Set migration deadline
 
-3. **Bump major version:**
-   ```bash
-   git tag -a v2.0.0 -m "Breaking: removed registry_url input"
-   ```
+3. **Bump major version:** title the pull request `feat!: ...` (or add a `BREAKING CHANGE:` footer);
+   the release workflow tags `v2.0.0` and starts `v2`.
 
 4. **Notify users:**
    - Post in organization discussions
@@ -345,10 +316,8 @@ When creating a new release:
 - [ ] Examples updated
 - [ ] Breaking changes documented
 - [ ] Migration guide created (if major version)
-- [ ] Release notes written
-- [ ] Git tag created
-- [ ] Major version pointer updated
-- [ ] GitHub release published
+- [ ] Pull request title is a conventional commit with the intended bump (`fix:`, `feat:`, `feat!:`)
+- [ ] `Release` run after the merge: tag, major pointer and GitHub release present
 - [ ] Users notified (if breaking changes)
 
 ## Related Documentation

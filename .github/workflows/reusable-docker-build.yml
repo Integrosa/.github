@@ -36,6 +36,16 @@ on:
         required: false
         type: boolean
         default: true
+      version_tag:
+        description: "A version already decided by reusable-release (its new_tag, e.g. 'v1.2.3'): build and label that version, count none here (docs/release-workflow.md). Empty: count it here as before. Pair it with push_git_tag: false and git_ref"
+        required: false
+        type: string
+        default: ""
+      git_ref:
+        description: "The commit to build (reusable-release's sha output, the commit it tagged); default the triggering commit"
+        required: false
+        type: string
+        default: ""
       dockerfile_path:
         description: "Path to Dockerfile"
         required: false
@@ -69,9 +79,9 @@ jobs:
     permissions:
       contents: write  # Required to push tags
     outputs:
-      version: ${{ steps.semver.outputs.version }}
-      version_tag: ${{ steps.semver.outputs.version_tag }}
-      docker_image_full: ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }}
+      version: ${{ steps.ver.outputs.version }}
+      version_tag: ${{ steps.ver.outputs.version_tag }}
+      docker_image_full: ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.ver.outputs.version_tag }}
       docker_image_path: ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}
       docker_image_digest: ${{ steps.build.outputs.digest }}
 
@@ -79,17 +89,44 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       with:
-        fetch-depth: 0  # Required for semantic versioning
+        ref: ${{ inputs.git_ref || github.sha }}
+        # Full history to count a version; a given version needs only the commit.
+        fetch-depth: ${{ inputs.version_tag != '' && 1 || 0 }}
         token: ${{ secrets.GITHUB_TOKEN }}  # Enables pushing tags
 
     - name: Get semantic version
       id: semver
+      if: inputs.version_tag == ''
       uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3  # v5.4.0
       with:
         tag_prefix: ${{ inputs.tag_prefix }}
         major_pattern: ${{ inputs.major_pattern }}
         minor_pattern: ${{ inputs.minor_pattern }}
         version_format: "${major}.${minor}.${patch}"
+
+    # One version for the build: the one reusable-release decided (version_tag), or the one counted
+    # above. A given version must be <tag_prefix>X.Y.Z, so the image tag and APP_VERSION stay semver.
+    - name: Version of this build
+      id: ver
+      env:
+        GIVEN: ${{ inputs.version_tag }}
+        GIT_REF: ${{ inputs.git_ref }}
+        TAG_PREFIX: ${{ inputs.tag_prefix }}
+        COUNTED_TAG: ${{ steps.semver.outputs.version_tag }}
+        COUNTED: ${{ steps.semver.outputs.version }}
+      run: |
+        set -euo pipefail
+        if [ -n "$GIVEN" ]; then
+          # The released commit, not the triggering one (they differ under workflow_run).
+          [ -n "$GIT_REF" ] || { echo "::error::version_tag needs git_ref (reusable-release's sha output)"; exit 1; }
+          version=${GIVEN#"$TAG_PREFIX"}
+          [ "$TAG_PREFIX$version" = "$GIVEN" ] && [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "::error::version_tag '$GIVEN' is not ${TAG_PREFIX}X.Y.Z"; exit 1; }
+          tag=$GIVEN
+        else
+          version=$COUNTED; tag=$COUNTED_TAG
+        fi
+        { echo "version=$version"; echo "version_tag=$tag"; } >> "$GITHUB_OUTPUT"
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
@@ -110,21 +147,22 @@ jobs:
         file: ${{ inputs.dockerfile_path }}
         push: true
         tags: |
-          ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.semver.outputs.version_tag }}
+          ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:${{ steps.ver.outputs.version_tag }}
           ${{ vars.REGISTRY_URL }}/${{ inputs.organization_name }}/${{ inputs.project_name }}:latest
         # Expose the release tag to the Dockerfile (`ARG APP_VERSION`) so the
         # app can show which version is deployed. Dockerfiles that do not
         # declare the ARG only get a "build-arg not consumed" warning.
         build-args: |
-          APP_VERSION=${{ steps.semver.outputs.version_tag }}
+          APP_VERSION=${{ steps.ver.outputs.version_tag }}
         # GitHub Actions layer cache — cuts paid runner minutes on incremental builds
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
+    # Not when the version came from reusable-release: that workflow made the tag already.
     - name: Create git tag
-      if: ${{ inputs.push_git_tag }}
+      if: ${{ inputs.push_git_tag && inputs.version_tag == '' }}
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a ${{ steps.semver.outputs.version_tag }} -m "Release ${{ steps.semver.outputs.version_tag }}"
-        git push origin ${{ steps.semver.outputs.version_tag }}
+        git tag -a ${{ steps.ver.outputs.version_tag }} -m "Release ${{ steps.ver.outputs.version_tag }}"
+        git push origin ${{ steps.ver.outputs.version_tag }}

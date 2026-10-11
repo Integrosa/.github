@@ -229,14 +229,23 @@ For bug fixes and backward-compatible improvements:
 3. Add tests
 4. Create PR with title: `fix: <description>` or `chore: <description>`
 
+### Releases (automatic)
+
+`.github/workflows/release.yml` (the reusable `reusable-release.yml`, docs/release-workflow.md) tags a release on every push to `main`, from the conventional commit
+subjects since the last tag; a squash merge's subject is the pull request's title (or the single
+commit's subject on a one-commit pull request), so keep both conventional: `fix:` is a patch, `feat:` a minor, `feat!:` or a `BREAKING CHANGE:` footer a major,
+and `docs:`, `ci:`, `test:`, `chore:` or `refactor:` make no release. It runs after `Test` passes on
+the merged commit, moves the major alias (`v1`) to the new tag and publishes the release notes. Nothing
+is tagged by hand any more; a release that stopped halfway is finished with "Re-run failed jobs".
+
 ### Breaking Changes
 
 For changes that require users to modify their workflows:
 
 1. Document the breaking change
 2. Create migration guide
-3. Update version numbers
-4. Create PR with title: `feat!: <description>` or include `BREAKING CHANGE:` in commit body
+3. Create PR with title: `feat!: <description>` or include `BREAKING CHANGE:` in commit body (the release
+   workflow then tags the next major and starts its alias, e.g. `v2`)
 
 ## Documentation Requirements
 

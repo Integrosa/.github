@@ -26,3 +26,14 @@ jobs:
           chmod +x "$RUNNER_TEMP/bin/yq"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: tests/helm-deploy-inputs.sh
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner's yq and jq, as reusable-release uses them.
+      - run: tests/release-guard.sh
+      - run: tests/release-publish.sh
+      - run: tests/release-version.sh

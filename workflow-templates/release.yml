@@ -1,0 +1,20 @@
+# Release this repository from conventional commits: fix -> patch, feat -> minor, breaking -> major,
+# docs/ci/chore/test/refactor -> no release. Tags v1.2.3, moves v1, publishes the release notes.
+# Details: https://github.com/Integrosa/.github/blob/main/docs/release-workflow.md
+name: Release
+
+on:
+  push:
+    branches: [ $default-branch ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Runs queue, so each version is computed after the previous release is tagged.
+    concurrency: {group: release, cancel-in-progress: false, queue: max}
+    uses: Integrosa/.github/.github/workflows/reusable-release.yml@v1
+    with:
+      # From the push event, so it is right whatever the default branch is called.
+      release_branch: ${{ github.event.repository.default_branch }}

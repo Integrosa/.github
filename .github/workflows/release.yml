@@ -1,0 +1,23 @@
+# Releases this repository itself with its own reusable release workflow (docs/release-workflow.md):
+# fix -> patch, feat -> minor, breaking -> major, the rest no release; v1 moves to every v1.x.y. Only
+# a commit whose Test run on main passed is released, so a broken workflow never becomes @v1.
+name: Release
+
+on:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    # Runs queue, so each version is computed after the previous release is tagged.
+    concurrency: {group: release, cancel-in-progress: false, queue: max}
+    # The local copy, so a change to the reusable workflow releases with itself.
+    uses: ./.github/workflows/reusable-release.yml
+    with:
+      sha: ${{ github.event.workflow_run.head_sha }}
