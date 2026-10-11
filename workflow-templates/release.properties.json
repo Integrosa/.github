@@ -1,0 +1,9 @@
+{
+  "name": "Integrosa Release (semantic versioning)",
+  "description": "Tag a semantic version from conventional commits on every push to the default branch, move the major tag (v1) and publish the release notes.",
+  "iconName": "tag",
+  "categories": [
+    "Continuous integration",
+    "Automation"
+  ]
+}

@@ -1,0 +1,268 @@
+# Reusable release: the conventional commit subjects since the last tag decide the next semantic
+# version, and the repository gets an annotated tag, its major alias moved (v1, v2, ...) and a GitHub
+# release with the changelog. `fix:` is a patch, `feat:` a minor, `!` after the type or a
+# `BREAKING CHANGE:` footer a major; `docs`, `ci`, `test`, `chore`, `refactor` and the rest make no
+# release, unless default_bump is patch (apps that need a version on every push). Documentation:
+# docs/release-workflow.md.
+#
+# Two jobs, so the third-party code never holds a write token: `version` runs
+# mathieudutour/github-tag-action (pinned) in dry-run mode with a read-only token, and `publish`, only
+# this file's own steps, creates the tags and the release through the GitHub API. `publish` is
+# idempotent: "Re-run failed jobs" finishes a release that stopped halfway (the outputs of `version`
+# are kept on such a re-run).
+#
+# The caller grants `contents: write`, runs it for the commit to release and queues its runs, so a
+# version is always computed after the previous release is tagged:
+#
+#   on: {push: {branches: [main]}}
+#   permissions: {contents: write}
+#   jobs:
+#     release:
+#       concurrency: {group: release, cancel-in-progress: false, queue: max}
+#       uses: Integrosa/.github/.github/workflows/reusable-release.yml@v1
+#
+# An app with a Docker build versions once, here, and builds that commit with that version (one tag
+# owner; docs/release-workflow.md): the build job sets version_tag and git_ref from this workflow's
+# outputs, push_git_tag: false, and runs only when new_tag is not empty.
+name: Reusable release
+
+on:
+  workflow_call:
+    inputs:
+      tag_prefix:
+        description: "Prefix of the version tags (v -> v1.2.3); letters, digits, dot, dash or underscore"
+        type: string
+        default: "v"
+      release_branch:
+        description: "The one branch whose commits release"
+        type: string
+        default: "main"
+      sha:
+        description: "The commit to release (default: the triggering commit); a caller gated on its tests passes the tested commit"
+        type: string
+        default: ""
+      default_bump:
+        description: "Bump when no commit asks for one: false (no release, for libraries and these workflows) or patch (a version on every push, for apps whose every build needs one)"
+        type: string
+        default: "false"
+      major_alias:
+        description: "Move the major alias (<prefix><major>, e.g. v1) to every new release"
+        type: boolean
+        default: true
+      github_release:
+        description: "Publish a GitHub release with the changelog"
+        type: boolean
+        default: true
+    outputs:
+      new_tag:
+        description: "The version tag of this run (new, or already on this commit when a run is repeated); empty when the commits made no release"
+        value: ${{ jobs.version.outputs.new_tag }}
+      sha:
+        description: "The commit released (build this one, not the triggering commit)"
+        value: ${{ jobs.version.outputs.sha }}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Whatever the caller grants, the version job reads only.
+    permissions:
+      contents: read
+    outputs:
+      new_tag: ${{ steps.result.outputs.tag }}
+      changelog: ${{ steps.version.outputs.changelog }}
+      sha: ${{ steps.inputs.outputs.sha }}
+    steps:
+      - name: Check inputs
+        id: inputs
+        env:
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+          BRANCH: ${{ inputs.release_branch }}
+          DEFAULT_BUMP: ${{ inputs.default_bump }}
+          SHA: ${{ inputs.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG_PREFIX" =~ ^[A-Za-z0-9._-]*$ ]] || { echo "tag_prefix: letters, digits, dot, dash or underscore only" >&2; exit 1; }
+          [[ "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "release_branch is not a plain branch name" >&2; exit 1; }
+          [[ "$DEFAULT_BUMP" =~ ^(false|patch)$ ]] || { echo "default_bump: false or patch" >&2; exit 1; }
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha must be a full commit id" >&2; exit 1; }
+          # The branch as a regular expression for the action (dots literal).
+          { echo "sha=$SHA"; echo "branch_re=^${BRANCH//./\\.}\$"; } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ steps.inputs.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      # Through the API: the checkout keeps no credentials, and private repositories refuse an
+      # unauthenticated fetch. `behind` or `identical`: the commit is in the branch's history.
+      - name: The commit is on the release branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.inputs.outputs.sha }}
+          BRANCH: ${{ inputs.release_branch }}
+        run: |
+          set -euo pipefail
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BRANCH...$SHA" --jq .status)
+          case "$status" in behind|identical) ;; *) echo "::error::$SHA is not on $BRANCH ($status): nothing to release"; exit 1;; esac
+      # One tag owner per tag prefix. reusable-docker-build tags `<its tag_prefix><x.y.z>` on every build
+      # (push_git_tag, default true; tag_prefix, default "v"), from its own version count, unless it
+      # builds a version given to it (version_tag). With the same prefix here, the two would race for the
+      # same numbers and one push would fail, so this stops before anything is tagged. Read from the
+      # caller's own workflow files at this commit.
+      - name: One tag owner per prefix
+        env:
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          clash=
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            # One line per job calling reusable-docker-build: job, push_git_tag ("true" when absent),
+            # tag_prefix ("v" when absent). It tags unless push_git_tag is a literal false, also when
+            # it builds a version given to it (version_tag empty falls back to its own count and tag).
+            # jq rather than yq expressions: has() tells false from absent.
+            # shellcheck disable=SC2016 # $w is a jq variable: single quotes on purpose
+            rows=$(yq -o json '.' "$f" | jq -r '.jobs // {} | to_entries[]
+              | select((.value.uses // "") | test("reusable-docker-build\\.ya?ml(@|$)"))
+              | (.value.with // {}) as $w
+              | [.key, (if ($w | has("push_git_tag")) then ($w.push_git_tag | tostring) else "true" end),
+                 (if ($w | has("tag_prefix")) then ($w.tag_prefix | tostring) else "v" end)] | @tsv')
+            while IFS=$'\t' read -r job tags prefix; do
+              [ -n "$job" ] || continue
+              # A GitHub expression counts as tagging, and as this prefix: only literal values opt out.
+              if [ "$tags" != false ] && { [ "$prefix" = "$TAG_PREFIX" ] || [[ "$prefix" == *\$\{\{* ]]; }; then
+                clash="$clash $f:$job"
+              fi
+            done <<<"$rows"
+          done
+          if [ -n "$clash" ]; then
+            echo "::error::Tags '${TAG_PREFIX}x.y.z' are already created by reusable-docker-build in:$clash. One owner per prefix: give one of them another tag_prefix (e.g. tag_prefix: image-v on the build), or set push_git_tag: false on the build. See docs/release-workflow.md, 'One tag owner'."
+            exit 1
+          fi
+      - name: Next version from the conventional commits (dry run, read-only)
+        id: version
+        uses: mathieudutour/github-tag-action@af99e60ce8132224b8e6ebab5023449fe256ed46  # v7.0.0
+        with:
+          github_token: ${{ github.token }}
+          dry_run: true
+          commit_sha: ${{ steps.inputs.outputs.sha }}
+          # The branch decides release or preview in the action; given here, not taken from GITHUB_REF
+          # (a workflow_run or a dispatch on another branch would otherwise compute a preview).
+          ref: refs/heads/${{ inputs.release_branch }}
+          release_branches: ${{ steps.inputs.outputs.branch_re }}
+          tag_prefix: ${{ inputs.tag_prefix }}
+          # Without it the semver parser takes "v1.2.3" as version 1.2.3 under any prefix ("" or "app-"),
+          # and another stream's tags (a build's v-tags) would count as this one's.
+          prefix_match_tag: true
+          default_bump: ${{ inputs.default_bump }}
+      # The version to publish: the computed one, or, when the commits release nothing because this
+      # commit already carries its version tag (a repeated run), that tag, so publish can finish what a
+      # previous run left (alias, release notes). Only a plain <prefix>X.Y.Z is ever published.
+      - name: Version to publish
+        id: result
+        env:
+          NEW_TAG: ${{ steps.version.outputs.new_tag }}
+          SHA: ${{ steps.inputs.outputs.sha }}
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+        run: |
+          set -euo pipefail
+          tag=$NEW_TAG
+          if [ -z "$tag" ]; then
+            re="^${TAG_PREFIX//./\\.}[0-9]+\.[0-9]+\.[0-9]+$"
+            tag=$(git tag --points-at "$SHA" | { grep -E "$re" || true; } | sort -V | tail -1)
+            newest=$(git tag --list | { grep -E "$re" || true; } | sort -V | tail -1)
+            if [ -n "$tag" ] && [ "$tag" != "$newest" ]; then
+              # An older release run again (re-run, late workflow_run): its tag stays, but nothing builds
+              # or deploys it again over the newer $newest.
+              echo "::notice::$SHA carries $tag, older than $newest: nothing to do"; tag=
+            elif [ -n "$tag" ]; then
+              echo "::notice::$SHA already carries $tag: finishing its release"
+            fi
+          fi
+          if [ -n "$tag" ]; then
+            v=${tag#"$TAG_PREFIX"}
+            [ "$TAG_PREFIX$v" = "$tag" ] && [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              || { echo "::error::'$tag' is not ${TAG_PREFIX}X.Y.Z (a preview version?): not publishing"; exit 1; }
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: version
+    if: needs.version.outputs.new_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    # One publish at a time per repository, queued (queue: max keeps every waiting run; the default
+    # would cancel a pending one, docs.github.com "concurrency"). The caller queues whole runs too.
+    concurrency:
+      group: reusable-release-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ needs.version.outputs.sha }}
+      TAG: ${{ needs.version.outputs.new_tag }}
+      TAG_PREFIX: ${{ inputs.tag_prefix }}
+    steps:
+      # Annotated tags through the GitHub API, no git push: a tag object, then its ref. Idempotent: a
+      # ref that already names this commit is left alone (a re-run), one that names another commit stops.
+      - name: Tag the release
+        run: |
+          set -euo pipefail
+          # The commit a tag ref names (annotated or lightweight), empty when there is none.
+          commit_of() {
+            local cur
+            if ! cur=$(gh api "repos/$REPO/git/ref/tags/$1" --jq .object 2>&1); then
+              # Only "not found" means absent; any other error (5xx, rate limit, auth) stops here.
+              grep -q 'HTTP 404' <<<"$cur" && return 0
+              echo "::error::reading tag $1: $cur" >&2; return 1
+            fi
+            if [ "$(jq -r .type <<<"$cur")" = tag ]; then
+              gh api "repos/$REPO/git/tags/$(jq -r .sha <<<"$cur")" --jq .object.sha
+            else
+              jq -r .sha <<<"$cur"
+            fi
+          }
+          tag_ref() { # tag_ref <name> <message> <force: yes|no>
+            local name=$1 msg=$2 force=$3 commit obj status
+            commit=$(commit_of "$name")
+            if [ -n "$commit" ]; then
+              if [ "$commit" = "$SHA" ]; then echo "$name already on $SHA"; return 0; fi
+              [ "$force" = yes ] || { echo "::error::$name exists on $commit, not $SHA: another run released first; 'Re-run all jobs' computes the next version"; return 1; }
+              # An alias only moves forward: never back to an older release (a late or repeated run).
+              status=$(gh api "repos/$REPO/compare/$commit...$SHA" --jq .status)
+              case "$status" in
+                ahead) ;;
+                behind|identical) echo "::notice::$name stays on $commit: $SHA is not newer"; return 0;;
+                *) echo "::error::$name is on $commit, which is not in $SHA's history ($status): move it by hand once, then re-run"; return 1;;
+              esac
+            fi
+            obj=$(gh api "repos/$REPO/git/tags" -f tag="$name" -f message="$msg" -f object="$SHA" -f type=commit --jq .sha)
+            if [ -n "$commit" ]; then
+              gh api -X PATCH "repos/$REPO/git/refs/tags/$name" -f sha="$obj" -F force=true >/dev/null
+            else
+              gh api "repos/$REPO/git/refs" -f ref="refs/tags/$name" -f sha="$obj" >/dev/null
+            fi
+            echo "$name -> $SHA"
+          }
+          tag_ref "$TAG" "Release $TAG" no
+          if [ "${{ inputs.major_alias }}" = true ]; then
+            version=${TAG#"$TAG_PREFIX"}
+            [[ "${version%%.*}" =~ ^[0-9]+$ ]] || { echo "::error::unexpected tag $TAG"; exit 1; }
+            tag_ref "$TAG_PREFIX${version%%.*}" "Update $TAG_PREFIX${version%%.*} to $TAG" yes
+          fi
+      - name: Publish the release notes
+        if: inputs.github_release
+        env:
+          CHANGELOG: ${{ needs.version.outputs.changelog }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then echo "release $TAG exists"; exit 0; fi
+          if [ -n "$CHANGELOG" ]; then
+            printf '%s\n' "$CHANGELOG" | gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --notes-file -
+          else
+            # A repeated run has no changelog of its own: GitHub writes the notes from the commits.
+            gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --generate-notes
+          fi

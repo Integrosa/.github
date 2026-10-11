@@ -52,6 +52,18 @@ token: no cluster credential in GitHub.
 
 [View Detailed Documentation](docs/helm-deploy-workflow.md)
 
+### 🏷️ Release Workflow
+
+Semantic versioning from conventional commits, without tagging by hand.
+
+**Features:**
+- ✅ `fix` -> patch, `feat` -> minor, breaking -> major, the rest no release
+- ✅ Annotated tag, the major alias (`v1`) moved, release notes from the commits
+- ✅ Starter template **Integrosa Release (semantic versioning)**
+- ✅ One tag owner: refuses to run next to a `reusable-docker-build` that tags the same prefix; apps version once and build that version (`version_tag`)
+
+[View Detailed Documentation](docs/release-workflow.md)
+
 ## 🚀 Quick Start
 
 ### Option 1: Use Starter Template (Easiest)

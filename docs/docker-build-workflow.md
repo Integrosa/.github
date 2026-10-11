@@ -35,6 +35,8 @@ jobs:
 | `major_pattern` | `string` | `"(BREAKING CHANGE:\|!:)"` | Regex pattern for major version bumps |
 | `minor_pattern` | `string` | `"feat:"` | Regex pattern for minor version bumps |
 | `push_git_tag` | `boolean` | `true` | Whether to create and push git tags |
+| `version_tag` | `string` | `""` | A version already decided by `reusable-release` (its `new_tag`): build and label that version, count none here ([release-workflow.md](release-workflow.md), "one tag owner"); pair it with `push_git_tag: false` and `git_ref` |
+| `git_ref` | `string` | `""` | The commit to build (`reusable-release`'s `sha` output); default the triggering commit |
 | `dockerfile_path` | `string` | `"./Dockerfile"` | Path to Dockerfile relative to repository root |
 | `docker_context` | `string` | `"."` | Docker build context path |
 
