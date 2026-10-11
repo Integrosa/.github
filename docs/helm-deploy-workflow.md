@@ -15,7 +15,9 @@ required, no force push, no deletion), because it decides what may deploy to the
 The cluster also requires:
 
 - organization `Integrosa` (`repository_owner_id` 258306423),
-- `ref` = `refs/heads/main` and `event_name` = `push` or `workflow_dispatch`,
+- `ref` = `refs/heads/main` and `event_name` = `push` or `workflow_dispatch` (one exception, integrosa_platform ADR 0038:
+  `refs/heads/staging` of `Integrosa/b3net-platform` only, as its own user `github:<owner id>/<repo id>@staging`,
+  bound in one staging tenant),
 - a RoleBinding `deployer` in the tenant namespace naming the user
   `github:258306423/<repository id>` (set up in `integrosa_platform`, `platform/tenants/<tenant>/app`).
 
