@@ -23,7 +23,17 @@ message into the body (`COMMIT_MESSAGES`). The analysis reads bodies too: a `BRE
 left in any commit of the branch makes a major release, and a `[no-release]` or `[skip-release]`
 anywhere in the message removes the commit from the analysis. With a merge commit or a rebase merge,
 the branch's own commits are analysed and the title is not. Keep titles and commit messages
-conventional, or set the repository to squash with the pull request's title and an empty body.
+conventional, or set the repository to squash with the pull request's title and an empty body, as this
+repository is since 2026-10-11 (`squash_merge_commit_title: PR_TITLE`,
+`squash_merge_commit_message: BLANK`): here the pull request's title alone decides, and a major
+release takes a title with `!` (`feat!: ...`).
+
+**Protecting the tags.** This repository has a tag ruleset (2026-10-11): `v*.*.*` tags cannot be moved
+or deleted by anyone, so an exact pin (`@v1.7.0`) always means the same code; creating them stays
+open for the release workflow. The major alias (`v1`) must move and stays unprotected: a ruleset
+cannot exempt the workflow's `GITHUB_TOKEN` (GitHub refuses the GitHub Actions app as a bypass actor
+of a repository ruleset), so protecting it too would need a GitHub App of our own with its token in
+`publish`. Callers that must not follow every release pin an exact version.
 
 ## Use it
 
