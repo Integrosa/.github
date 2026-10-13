@@ -12,10 +12,10 @@ on:
         required: true
         type: string
       runs_on:
-        description: "Runner to use for the build job (GitHub-hosted; homelab runner is gone)"
+        description: "Runner for the build job; empty = the organisation variable CI_RUNNER (self-hosted runners on the old VPS, integrosa_platform ADR 0062), else ubuntu-latest"
         required: false
         type: string
-        default: "ubuntu-latest"
+        default: ""
       tag_prefix:
         description: "Prefix for git tags"
         required: false
@@ -75,7 +75,7 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ inputs.runs_on }}
+    runs-on: ${{ inputs.runs_on || vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: write  # Required to push tags
     outputs:

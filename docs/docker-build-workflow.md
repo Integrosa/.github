@@ -30,7 +30,7 @@ jobs:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `runs_on` | `string` | `"ubuntu-latest"` | Runner label to use for the build job |
+| `runs_on` | `string` | `""` | Runner label for the build job; empty = the organisation variable `CI_RUNNER` (the self-hosted runners on the old VPS, `integrosa_platform` ADR 0062), else `ubuntu-latest`. Deleting the variable sends every build back to GitHub-hosted runners |
 | `tag_prefix` | `string` | `"v"` | Prefix for git tags (e.g., `v1.2.3`) |
 | `major_pattern` | `string` | `"(BREAKING CHANGE:\|!:)"` | Regex pattern for major version bumps |
 | `minor_pattern` | `string` | `"feat:"` | Regex pattern for minor version bumps |
