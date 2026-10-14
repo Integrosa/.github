@@ -76,9 +76,9 @@ on:
 jobs:
   build:
     # An explicit runs_on wins; otherwise only the integrosa-ci label is taken from CI_RUNNER (integrosa_platform
-    # ADR 0062): a repository variable of the same name overrides the organisation's and must not send a job with
-    # registry credentials to any other runner.
-    runs-on: ${{ inputs.runs_on || (vars.CI_RUNNER == 'integrosa-ci' && 'integrosa-ci' || 'ubuntu-latest') }}
+    # ADR 0062), and then the runner group, not only the label: a repository variable of the same name overrides
+    # the organisation's and must not send a job with registry credentials to any other runner.
+    runs-on: ${{ inputs.runs_on || (vars.CI_RUNNER == 'integrosa-ci' && fromJSON('{"group":"integrosa-ci","labels":["integrosa-ci"]}') || 'ubuntu-latest') }}
     permissions:
       contents: write  # Required to push tags
     outputs:

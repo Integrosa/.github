@@ -46,10 +46,11 @@ on:
 jobs:
   deploy:
     # The organisation's self-hosted runners when CI_RUNNER is integrosa-ci (integrosa_platform ADR 0063: the
-    # cluster accepts tokens from them), else GitHub-hosted; deleting the variable moves deploys back. Only that
-    # one label is honoured: a repository variable of the same name overrides the organisation's, and must not
-    # send a job carrying a cluster token to any other runner (e.g. a persistent one).
-    runs-on: ${{ vars.CI_RUNNER == 'integrosa-ci' && 'integrosa-ci' || 'ubuntu-latest' }}
+    # cluster accepts tokens from them), else GitHub-hosted; deleting the variable moves deploys back. The job
+    # names the runner GROUP, not only the label: a runner outside the group (another org runner, a repository
+    # runner) never gets a job carrying a cluster token, even with the same label. Only that value is honoured:
+    # a repository variable of the same name overrides the organisation's.
+    runs-on: ${{ vars.CI_RUNNER == 'integrosa-ci' && fromJSON('{"group":"integrosa-ci","labels":["integrosa-ci"]}') || 'ubuntu-latest' }}
     # Helm's --timeout applies to every operation on its own: each pre/post hook and the wait
     # (pkg/action/upgrade.go, hooks.go @ v4.3.0), and a rollback repeats that (rollin.Timeout = u.Timeout).
     # One pre-upgrade and one post-upgrade hook resource, no rollback hooks: pre hook, wait, post hook and
