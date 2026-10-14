@@ -45,7 +45,12 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # The organisation's self-hosted runners when CI_RUNNER is integrosa-ci (integrosa_platform ADR 0063: the
+    # cluster accepts tokens from them), else GitHub-hosted; deleting the variable moves deploys back. The job
+    # names the runner GROUP, not only the label: a runner outside the group (another org runner, a repository
+    # runner) never gets a job carrying a cluster token, even with the same label. Only that value is honoured:
+    # a repository variable of the same name overrides the organisation's.
+    runs-on: ${{ vars.CI_RUNNER == 'integrosa-ci' && fromJSON('{"group":"integrosa-ci","labels":["integrosa-ci"]}') || 'ubuntu-latest' }}
     # Helm's --timeout applies to every operation on its own: each pre/post hook and the wait
     # (pkg/action/upgrade.go, hooks.go @ v4.3.0), and a rollback repeats that (rollin.Timeout = u.Timeout).
     # One pre-upgrade and one post-upgrade hook resource, no rollback hooks: pre hook, wait, post hook and
@@ -201,7 +206,7 @@ jobs:
             printf '%s\n' --set-string "image.repository=$IMAGE_REPOSITORY" --set-string "image.digest=$IMAGE_DIGEST" > "$RUNNER_TEMP/set-args"
           fi
 
-      - name: Install Helm v4.3.0 (pinned checksum)
+      - name: Install Helm v4.3.0 and kubectl v1.36.5 (pinned checksums)
         run: |
           set -euo pipefail
           # sha256 from the v4.3.0 release notes on GitHub and get.helm.sh (2026-10-07).
@@ -210,6 +215,12 @@ jobs:
           tar -xzf "$RUNNER_TEMP/helm.tgz" -C "$RUNNER_TEMP" linux-amd64/helm
           sudo install "$RUNNER_TEMP/linux-amd64/helm" /usr/local/bin/helm
           helm version
+          # kubectl v1.36.5, the cluster's minor and patch (stable-1.36, 2026-10-14); sha256 from dl.k8s.io.
+          # ubuntu-latest ships one, the self-hosted runner image does not (integrosa_platform ADR 0063).
+          curl -fsSLo "$RUNNER_TEMP/kubectl" https://dl.k8s.io/release/v1.36.5/bin/linux/amd64/kubectl
+          echo "33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e  $RUNNER_TEMP/kubectl" | sha256sum -c -
+          sudo install "$RUNNER_TEMP/kubectl" /usr/local/bin/kubectl
+          kubectl version --client
 
       - name: Refuse plain Secrets in the chart
         # App secrets travel as SealedSecrets (integrosa_platform ADR 0029): a plain Secret would sit in
