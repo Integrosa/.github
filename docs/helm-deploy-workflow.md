@@ -90,7 +90,7 @@ to send a token a cluster accepts to another host. Rotating a cluster's CA means
 | `namespace` | yes | – | Tenant namespace |
 | `cluster` | no | `integrosa-platform` | Target cluster, `integrosa-platform` or `b3net-prod` (see Clusters) |
 | `values_file` | no | `""` | Values file inside `chart_path`, e.g. `values-prod.yaml`: a relative path with the same rules as `chart_path`, a regular file, not in the chart's `templates/`, `crds/` or `charts/`. Passed as `--values` after the chart's `values.yaml`; the image `--set-string` arguments still take precedence over it. Pass a literal per environment job: a re-run of an already deployed commit does nothing, whatever `values_file` says, so a values change needs a new commit. Added 2026-10-18 with the owner's approval; it extends the inputs of integrosa_platform ADR 0039 |
-| `chart_path` | yes | – | Chart subdirectory of the calling repository, e.g. `deploy/chart` (not the repository root; must contain `Chart.yaml`; chart dependencies must be vendored in its `charts/`, the workflow does not run `helm dependency build`) |
+| `chart_path` | yes | – | Chart subdirectory of the calling repository, e.g. `deploy/chart` (not the repository root; must contain `Chart.yaml`; no symlink inside it or as it or its parents, since Helm follows them and a committed link could read runner files into the release; chart dependencies must be vendored in its `charts/`, the workflow does not run `helm dependency build`) |
 | `image_repository` | one image | `""` | Image without tag, the build's `docker_image_path` output |
 | `image_digest` | one image | `""` | `sha256:...`, the build's `docker_image_digest` output |
 | `images` | several images | `""` | JSON `{"<name>": {"repository": "...", "digest": "sha256:..."}}`, 1-10 entries, name `^[a-z][a-zA-Z0-9]{0,30}$`; instead of `image_repository`/`image_digest`, never both |
@@ -138,9 +138,8 @@ changed. `tests/helm-deploy-inputs.sh` runs the input checks against good and ba
 
 1. Selects the cluster: its API address, CA and audience, or fails on any other value.
 2. Checks the inputs (digest format, registry path, DNS names, relative chart directory with a
-   `Chart.yaml`, the `images` JSON shape, `timeout`, `values_file`) and writes the `--set-string`
-   arguments, plus `--values <chart_path>/<values_file>` when given, used by
-   steps 4 and 8.
+   `Chart.yaml` and no symlink in it or as it, the `images` JSON shape, `timeout`, `values_file`) and writes the
+   `--set-string` arguments, plus `--values <chart_path>/<values_file>` when given, used by steps 4 and 8.
 3. Installs Helm v4.3.0 and verifies its pinned SHA-256.
 4. Refuses plain Secrets: renders the chart (`helm template` with the deploy values and the
    SealedSecret API declared and `crds/` included) and fails before any cluster call when a rendered
