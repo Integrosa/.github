@@ -40,8 +40,8 @@ Docker Compose stack (`Integrosa/cluster-iac`).
 
 ### ☸️ Helm Deploy Workflow
 
-Deploys an app's Helm chart to the integrosa-platform k3s cluster with a short-lived GitHub OIDC
-token: no cluster credential in GitHub.
+Deploys an app's Helm chart to one of the organization's k3s clusters (`cluster`: `integrosa-platform`
+by default, or `b3net-prod`) with a short-lived GitHub OIDC token: no cluster credential in GitHub.
 
 **Features:**
 - ✅ Deploys by image digest with `--rollback-on-failure`

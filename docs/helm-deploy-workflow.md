@@ -1,8 +1,26 @@
 # Helm Deploy Workflow
 
-`reusable-helm-deploy.yml` deploys a Helm chart from the calling repository to the
-integrosa-platform k3s cluster. It logs in with a short-lived GitHub OIDC token, so no cluster
+`reusable-helm-deploy.yml` deploys a Helm chart from the calling repository to one of the
+organization's k3s clusters. It logs in with a short-lived GitHub OIDC token, so no cluster
 credential is stored in GitHub (integrosa_platform ADR 0030).
+
+## Clusters
+
+The input `cluster` picks one value from a closed list (integrosa_platform ADR 0054). Each value has its
+API address, CA and token audience fixed in the workflow. Any other value, an empty one included, fails
+before a token is requested.
+
+| `cluster` | API | Audience | Runner | Owner |
+|-----------|-----|----------|--------|-------|
+| `integrosa-platform` (default) | `https://194.163.128.14:6443` | `integrosa-platform` | the organization's self-hosted runners when the organization variable `CI_RUNNER` is `integrosa-ci` (integrosa_platform ADR 0063), else `ubuntu-latest` | `integrosa_platform` |
+| `b3net-prod` | `https://5.9.48.90:6443` | `b3net-prod` | always `ubuntu-latest`: this API accepts only `runner_environment` `github-hosted` | `b3net-bare-metal-iac` (ADR 0013, 0017) |
+
+The workflow `Cross-audience` sends a real token minted for one cluster's audience to the other cluster's
+API and expects 401, with each certificate verified by the pinned CA. Both clusters also require this
+workflow's `job_workflow_ref`, which that token cannot carry, so the job proves the refusal, the
+addresses and the CAs, not that the audience is the reason (that is in the APIs' logs). It is not part of
+`Test`, so a cluster outage does not block releases of this repository. Runs of the
+same release queue per cluster, so a deploy to one cluster never waits for the other.
 
 ## Call it from `@main` only
 
@@ -12,14 +30,15 @@ The cluster accepts a token only when its `job_workflow_ref` claim is exactly
 fails with `401 Unauthorized`. `main` of this repository is protected by a ruleset (pull request
 required, no force push, no deletion), because it decides what may deploy to the cluster.
 
-The cluster also requires:
+Each cluster also requires:
 
 - organization `Integrosa` (`repository_owner_id` 258306423),
-- `ref` = `refs/heads/main` and `event_name` = `push` or `workflow_dispatch` (one exception, integrosa_platform ADR 0038:
-  `refs/heads/staging` of `Integrosa/b3net-platform` only, as its own user `github:<owner id>/<repo id>@staging`,
-  bound in one staging tenant),
+- `ref` = `refs/heads/main` and `event_name` = `push` or `workflow_dispatch` (one exception, on
+  `integrosa-platform` only, integrosa_platform ADR 0038: `refs/heads/staging` of `Integrosa/b3net-platform`,
+  as its own user `github:<owner id>/<repo id>@staging`, bound in one staging tenant),
 - a RoleBinding `deployer` in the tenant namespace naming the user
-  `github:258306423/<repository id>` (set up in `integrosa_platform`, `platform/tenants/<tenant>/app`).
+  `github:258306423/<repository id>` (set up by the cluster's owner: `integrosa_platform`
+  `platform/tenants/<tenant>/app`, or `b3net-bare-metal-iac` `tenants/<tenant>`).
 
 ## Usage
 
@@ -55,9 +74,11 @@ jobs:
 
 `docker_image_digest` exists from `reusable-docker-build` v1.4.0 on (and `@v1` once it points there).
 
-The API address and the cluster CA are fixed in the workflow, not inputs: a caller must not be able
-to send a token the cluster accepts to another host. Rotating the cluster CA means a PR here
-(integrosa_platform `docs/runbooks/host.md`, CA rotation).
+For `b3net-prod`, add `cluster: b3net-prod` under `with:`.
+
+The API addresses and the cluster CAs are fixed in the workflow, not inputs: a caller must not be able
+to send a token a cluster accepts to another host. Rotating a cluster's CA means a PR here
+(integrosa_platform `docs/runbooks/host.md`; for `b3net-prod`, b3net-bare-metal-iac ADR 0017).
 
 ## Inputs
 
@@ -65,6 +86,7 @@ to send a token the cluster accepts to another host. Rotating the cluster CA mea
 |-------|----------|---------|-------------|
 | `release` | yes | – | Helm release name |
 | `namespace` | yes | – | Tenant namespace |
+| `cluster` | no | `integrosa-platform` | Target cluster, `integrosa-platform` or `b3net-prod` (see Clusters) |
 | `chart_path` | yes | – | Chart subdirectory of the calling repository, e.g. `deploy/chart` (not the repository root; must contain `Chart.yaml`; chart dependencies must be vendored in its `charts/`, the workflow does not run `helm dependency build`) |
 | `image_repository` | one image | `""` | Image without tag, the build's `docker_image_path` output |
 | `image_digest` | one image | `""` | `sha256:...`, the build's `docker_image_digest` output |
@@ -111,29 +133,30 @@ changed. `tests/helm-deploy-inputs.sh` runs the input checks against good and ba
 
 ## What it does
 
-1. Checks the inputs (digest format, registry path, DNS names, relative chart directory with a
+1. Selects the cluster: its API address, CA and audience, or fails on any other value.
+2. Checks the inputs (digest format, registry path, DNS names, relative chart directory with a
    `Chart.yaml`, the `images` JSON shape, `timeout`) and writes the `--set-string` arguments used by
-   steps 3 and 7.
-2. Installs Helm v4.3.0 and verifies its pinned SHA-256.
-3. Refuses plain Secrets: renders the chart (`helm template` with the deploy values and the
+   steps 4 and 8.
+3. Installs Helm v4.3.0 and verifies its pinned SHA-256.
+4. Refuses plain Secrets: renders the chart (`helm template` with the deploy values and the
    SealedSecret API declared and `crds/` included) and fails before any cluster call when a rendered
    manifest, or an element of an `items` list at any depth (Helm flattens those), is a `v1` `Secret`
    (hooks included; a reference to a Secret inside another object does not count). App secrets belong in a SealedSecret, sealed with the public certificate in
    [`sealed-secrets/`](../sealed-secrets/README.md). This is a best-effort early check (offline
    rendering has no `lookup` and always looks like a first install); the cluster is the real gate:
    the CI user may write only Helm release Secrets in a tenant namespace (integrosa_platform ADR 0033).
-4. Writes a kubeconfig whose user is an exec plugin: every Helm or kubectl process asks GitHub for
-   a fresh OIDC token (audience `integrosa-platform`). The token never lands on disk.
-5. Prints the token's claims (never the token) and, as a non-blocking diagnostic,
+5. Writes a kubeconfig whose user is an exec plugin: every Helm or kubectl process asks GitHub for
+   a fresh OIDC token (the selected cluster's audience). The token never lands on disk.
+6. Prints the token's claims (never the token) and, as a non-blocking diagnostic,
    `kubectl auth whoami`.
-6. Never deploys an older commit than the last deploy. Every deploy records `deploy <sha>` as the
+7. Never deploys an older commit than the last deploy. Every deploy records `deploy <sha>` as the
    Helm revision description; only revisions that succeeded (`deployed`, `superseded`) count. A run
    deploys only a commit that descends from the last recorded one (GitHub compare API). An older
    commit (slow build, re-run of an old run) is skipped with a warning; the commit that is already
    recorded is not deployed again (notice); both jobs stay green. A diverged history or a failed
    compare fails the job. Runs of one release wait in a queue (`concurrency` with `queue: max`,
    so a waiting run is never cancelled by a later one).
-7. `helm upgrade --install --rollback-on-failure --wait --timeout <timeout>` (default 5m): a failed
+8. `helm upgrade --install --rollback-on-failure --wait --timeout <timeout>` (default 5m): a failed
    upgrade rolls back to the last good release, and a failed first install is removed. Helm applies
    the timeout to each hook and to the wait separately, in the upgrade and again in the rollback: a
    chart with one pre-upgrade hook resource, at most one post-upgrade hook resource and no rollback hooks needs at
@@ -143,7 +166,7 @@ changed. `tests/helm-deploy-inputs.sh` runs the input checks against good and ba
    with more hooks needs a shorter timeout.
 
 Rolling back a bad version that deployed fine: `helm rollback <release> <revision>` by the platform
-owner, then a revert on `main` (re-running any earlier run does nothing, see step 6).
+owner, then a revert on `main` (re-running any earlier run does nothing, see step 7).
 
 If a run is cancelled while Helm is working, the release can stay in `pending-upgrade`,
 `pending-rollback` or `pending-install`, and Helm then refuses new upgrades ("another operation
