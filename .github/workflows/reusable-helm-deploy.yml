@@ -40,6 +40,11 @@ on:
         required: false
         type: string
         default: ""
+      values_file:
+        description: "Values file inside chart_path (relative path, e.g. values-prod.yaml), passed as --values after the chart's values.yaml; empty for none"
+        required: false
+        type: string
+        default: ""
       cluster:
         description: "Target cluster: integrosa-platform (default) or b3net-prod; any other value fails before a token is requested"
         required: false
@@ -86,6 +91,7 @@ jobs:
       IMAGES: ${{ inputs.images }}
       TIMEOUT: ${{ inputs.timeout }}
       CLUSTER: ${{ inputs.cluster }}
+      VALUES_FILE: ${{ inputs.values_file }}
       # integrosa-platform: API https://194.163.128.14:6443, audience integrosa-platform (step Select cluster);
       # the name API_CA is the one integrosa_platform docs/runbooks/host.md (CA rotation) points to.
       # k3s server CA (CN=k3s-server-ca@1791238499, valid until 2036-11-21; sha256
@@ -220,10 +226,12 @@ jobs:
           repo_body='[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)+'
           digest_body='sha256:[0-9a-f]{64}'
           name_body='[a-z][a-zA-Z0-9]{0,30}'
+          # A relative path of the caller's repo (chart_path, and values_file inside it); ".." segments are refused apart.
+          path_body='[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*'
           max_images=10
           [[ "$NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || { echo "namespace is not a DNS label" >&2; exit 1; }
           [[ "$RELEASE" =~ ^[a-z0-9]([-a-z0-9]{0,51}[a-z0-9])?$ ]] || { echo "release is not a valid Helm release name" >&2; exit 1; }
-          [[ "$CHART_PATH" =~ ^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$ && ! "/$CHART_PATH/" =~ /\.\.?/ ]] \
+          [[ "$CHART_PATH" =~ ^($path_body)$ && ! "/$CHART_PATH/" =~ /\.\.?/ ]] \
             || { echo "chart_path must be a relative directory inside the repo" >&2; exit 1; }
           [ -f "$CHART_PATH/Chart.yaml" ] || { echo "no Chart.yaml in $CHART_PATH" >&2; exit 1; }
           [[ "$TIMEOUT" =~ ^([1-9]|10)m$ ]] || { echo "timeout must be 1m-10m" >&2; exit 1; }
@@ -246,6 +254,18 @@ jobs:
             [[ "$IMAGE_DIGEST" =~ ^($digest_body)$ ]] || { echo "image_digest must be sha256:<64 hex> (or use images)" >&2; exit 1; }
             [[ "$IMAGE_REPOSITORY" =~ ^($repo_body)$ ]] || { echo "image_repository must be a registry path without tag or digest" >&2; exit 1; }
             printf '%s\n' --set-string "image.repository=$IMAGE_REPOSITORY" --set-string "image.digest=$IMAGE_DIGEST" > "$RUNNER_TEMP/set-args"
+          fi
+          # values_file: chart_path's path rules, a regular file, not in templates/, crds/ or charts/ (Helm would load
+          # it as a template, CRD or subchart). Symlinks are not resolved: Helm follows them inside the chart anyway, so
+          # the chart, not this check, is the boundary. Appended to set-args, so helm template (the Secret check) and
+          # helm upgrade both read it; --set-string still wins over it, so the images are always the build's.
+          if [ -n "$VALUES_FILE" ]; then
+            [[ "$VALUES_FILE" =~ ^($path_body)$ && ! "/$VALUES_FILE/" =~ /\.\.?/ ]] \
+              || { echo "values_file must be a relative path inside chart_path" >&2; exit 1; }
+            [[ ! "$VALUES_FILE" =~ ^(templates|crds|charts)/ ]] \
+              || { echo "values_file must not be in the chart's templates/, crds/ or charts/" >&2; exit 1; }
+            [ -f "$CHART_PATH/$VALUES_FILE" ] || { echo "no file $VALUES_FILE in $CHART_PATH" >&2; exit 1; }
+            printf '%s\n' --values "$CHART_PATH/$VALUES_FILE" >> "$RUNNER_TEMP/set-args"
           fi
 
       - name: Install Helm v4.3.0 and kubectl v1.36.5 (pinned checksums)

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs the "Check inputs" step of reusable-helm-deploy.yml (extracted with yq) against good and bad
-# inputs; checks the exit code and the --set-string arguments it writes to $RUNNER_TEMP/set-args.
+# inputs; checks the exit code and the arguments it writes to $RUNNER_TEMP/set-args (--set-string, and --values for
+# values_file), which helm template and helm upgrade both read.
 # Needs bash, jq and yq v4 (mikefarah).
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -8,11 +9,15 @@ wf=.github/workflows/reusable-helm-deploy.yml
 script=$(yq -e '.jobs.deploy.steps[] | select(.name == "Check inputs") | .run' "$wf") || { echo "no Check inputs step"; exit 1; }
 fail=0
 ARGS=
-run() { # run <expect 0|1> <name>; inputs in IMAGES IMAGE_REPOSITORY IMAGE_DIGEST TIMEOUT
+run() { # run <expect 0|1> <name>; inputs in IMAGES IMAGE_REPOSITORY IMAGE_DIGEST TIMEOUT VF (values_file); VF_MAKE
+  # creates that file in the chart, VF_DIR that directory
   local tmp rc
   tmp=$(mktemp -d); mkdir -p "$tmp/chart"; touch "$tmp/chart/Chart.yaml"
+  if [ -n "${VF_MAKE:-}" ]; then mkdir -p "$(dirname "$tmp/chart/$VF_MAKE")"; touch "$tmp/chart/$VF_MAKE"; fi
+  if [ -n "${VF_DIR:-}" ]; then mkdir -p "$tmp/chart/$VF_DIR"; fi
   ( cd "$tmp" && RUNNER_TEMP="$tmp" NAMESPACE="${NS:-b3net-staging}" RELEASE="${REL:-medusa}" CHART_PATH="${CP:-chart}" \
       IMAGES="${IMAGES:-}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-}" IMAGE_DIGEST="${IMAGE_DIGEST:-}" TIMEOUT="${TIMEOUT:-5m}" \
+      VALUES_FILE="${VF:-}" \
       bash -c "$script" >/dev/null 2>&1 ); rc=$?
   if { [ "$1" = 0 ] && [ "$rc" = 0 ]; } || { [ "$1" = 1 ] && [ "$rc" != 0 ]; }; then echo "ok   $2"; else echo "FAIL $2 (exit $rc)"; fail=1; fi
   ARGS=$(cat "$tmp/set-args" 2>/dev/null); rm -rf "$tmp"
@@ -64,6 +69,29 @@ IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D CP=/chart run 1 "absolute chart pa
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D CP=missing run 1 "chart path without Chart.yaml"
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D NS='Bad_NS' run 1 "namespace not a DNS label"
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D REL='-x' run 1 "release starting with -"
+# values_file: a file inside chart_path, passed as --values to helm template and helm upgrade (both read set-args).
+VFA=$'--set-string\nimage.repository='"$R"$'\n--set-string\nimage.digest='"$D"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=values-prod.yaml VF_MAKE=values-prod.yaml run 0 "values_file in the chart"
+if [ "$ARGS" = "$VFA"$'\n--values\nchart/values-prod.yaml' ]; then echo "ok   values_file args"; else echo "FAIL values_file args: $ARGS"; fail=1; fi
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=env/prod.yaml VF_MAKE=env/prod.yaml run 0 "values_file in a chart subdirectory"
+if [ "$ARGS" = "$VFA"$'\n--values\nchart/env/prod.yaml' ]; then echo "ok   values_file subdirectory args"; else echo "FAIL values_file subdirectory args: $ARGS"; fail=1; fi
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=missing.yaml run 1 "values_file that does not exist"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=../values.yaml run 1 "values_file with .."
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=env/../../x.yaml VF_MAKE=env/x.yaml run 1 "values_file escaping through .."
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=/etc/hosts run 1 "absolute values_file"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=-values.yaml VF_MAKE=./-values.yaml run 1 "values_file starting with -"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=env VF_DIR=env run 1 "values_file that is a directory"
+# Helm loads these directories of a chart as templates, CRDs and subcharts: a values file there would be rendered too.
+for d in templates crds charts; do
+  IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=$d/prod.yaml VF_MAKE=$d/prod.yaml run 1 "values_file in $d/"
+done
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=env/templates/prod.yaml VF_MAKE=env/templates/prod.yaml run 0 "values_file in a nested templates/ (not Helm's)"
+IMAGES="{\"backend\":{\"repository\":\"$R\",\"digest\":\"$D\"}}" VF=values-prod.yaml VF_MAKE=values-prod.yaml run 0 "images with values_file"
+if [ "$(tail -2 <<<"$ARGS")" = $'--values\nchart/values-prod.yaml' ] && grep -qx -- "images.backend.digest=$D" <<<"$ARGS"; then echo "ok   images with values_file args"; else echo "FAIL images with values_file args: $ARGS"; fail=1; fi
+# values_file follows chart_path's path rules: both checks use the same pattern.
+if [ "$(grep -c '=~ ^($path_body)\$' <<<"$script")" = 2 ]; then echo "ok   chart_path and values_file share the path pattern"; else echo "FAIL chart_path and values_file do not share path_body"; fail=1; fi
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=$'values.yaml\n--set\nx=y' VF_MAKE=values.yaml run 1 "values_file with a newline"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF='values prod.yaml' VF_MAKE='values prod.yaml' run 1 "values_file with a space"
 # The docs table states the rules the step enforces (the input description points to the docs).
 nb=$(sed -n "s/^ *name_body='\(.*\)'$/\1/p" <<<"$script"); mx=$(sed -n 's/^ *max_images=\([0-9]*\)$/\1/p' <<<"$script")
 if [ -n "$nb" ] && [ -n "$mx" ] && grep -qF "1-$mx entries, name \`^$nb\$\`" docs/helm-deploy-workflow.md; then echo "ok   docs state the step's image rules"; else echo "FAIL docs and step disagree on the image rules (name '$nb', max '$mx')"; fail=1; fi
