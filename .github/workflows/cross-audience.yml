@@ -1,0 +1,62 @@
+# integrosa_platform ADR 0054: a real GitHub token minted for one cluster's audience gets 401 from the other
+# cluster's API, and each API's certificate verifies with the CA reusable-helm-deploy pins. Both clusters also
+# require job_workflow_ref of reusable-helm-deploy, which this token cannot have, so the 401 proves the refusal,
+# the address and the CA, not its reason: the audience rejection is in the APIs' logs only. Not part of Test:
+# release.yml releases on a passing Test, and a cluster outage must not block releases of this repo.
+name: Cross-audience
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/reusable-helm-deploy.yml, .github/workflows/cross-audience.yml]
+  pull_request:
+    paths: [.github/workflows/reusable-helm-deploy.yml, .github/workflows/cross-audience.yml]
+permissions:
+  contents: read
+jobs:
+  cross-audience:
+    # A pull request from a fork gets no OIDC token.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # The same yq as reusable-helm-deploy (v4.54.1, sha256 from the release's checksums file).
+      - name: Install yq v4.54.1 (pinned checksum)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/yq" https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
+          echo "8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f  $RUNNER_TEMP/bin/yq" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bin/yq"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Token for one cluster is refused by the other
+        run: |
+          set -euo pipefail
+          wf=.github/workflows/reusable-helm-deploy.yml
+          # The deploy job's own Select cluster step gives each cluster's address and CA.
+          sel=$(yq -e '.jobs.deploy.steps[] | select(.name == "Select cluster") | .run' "$wf")
+          API_CA=$(yq -e '.jobs.deploy.env.API_CA' "$wf"); B3NET_API_CA=$(yq -e '.jobs.deploy.env.B3NET_API_CA' "$wf")
+          export API_CA B3NET_API_CA
+          fail=0
+          for pair in "b3net-prod integrosa-platform" "integrosa-platform b3net-prod"; do
+            read -r aud target <<<"$pair"
+            dir=$(mktemp -d)
+            RUNNER_TEMP="$dir" GITHUB_ENV="$dir/env" CLUSTER="$target" bash -c "$sel"
+            server=$(sed -n 's/^API_SERVER=//p' "$dir/env")
+            tok=$(curl -fsS -H @<(printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN") \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$aud" | jq -r .value)
+            echo "::add-mask::$tok"
+            code=$(curl -s --cacert "$dir/api-ca.pem" --max-time 15 -o /dev/null -w '%{http_code}' \
+              -H @<(printf 'Authorization: Bearer %s\n' "$tok") "$server/api") || true
+            unset tok
+            if [ "$code" = 401 ]; then echo "ok   audience $aud refused by $target ($server)"
+            else echo "::error::audience $aud on $target ($server): HTTP $code, expected 401 (000: no connection or TLS failure)"; fail=1; fi
+            rm -rf "$dir"
+          done
+          exit $fail

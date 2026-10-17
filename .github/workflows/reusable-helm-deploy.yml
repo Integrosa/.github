@@ -1,12 +1,15 @@
-name: Reusable Helm deploy (integrosa-platform, GitHub OIDC)
+name: Reusable Helm deploy (integrosa-platform or b3net-prod, GitHub OIDC)
 
-# Deploys a chart from the calling repo to the k3s cluster with a short-lived GitHub OIDC token
-# (integrosa_platform ADR 0030): no cluster secret in GitHub. The cluster accepts the token only from
+# Deploys a chart from the calling repo to a k3s cluster with a short-lived GitHub OIDC token
+# (integrosa_platform ADR 0030): no cluster secret in GitHub. The input cluster picks one of a closed list
+# (integrosa_platform ADR 0054), each with its API address, CA and audience fixed here. Each cluster accepts
+# the token only from
 # this file on main of Integrosa/.github (job_workflow_ref), so callers use @main, never a tag or SHA,
 # and only for push/workflow_dispatch runs on main of repos the tenant's RoleBinding names.
 # The caller job must grant permissions: {id-token: write, contents: read}.
-# The API address and CA are fixed here, not inputs: a caller must not be able to send a token the
-# cluster accepts to another host. CA rotation (integrosa_platform docs/runbooks/host.md) updates them.
+# The API addresses and CAs are fixed here, not inputs: a caller must not be able to send a token a
+# cluster accepts to another host. A CA rotation updates them (integrosa-platform: integrosa_platform
+# docs/runbooks/host.md; b3net-prod: b3net-bare-metal-iac ADR 0017).
 on:
   workflow_call:
     inputs:
@@ -37,6 +40,16 @@ on:
         required: false
         type: string
         default: ""
+      values_file:
+        description: "Values file inside chart_path (relative path, e.g. values-prod.yaml), passed as --values after the chart's values.yaml; empty for none"
+        required: false
+        type: string
+        default: ""
+      cluster:
+        description: "Target cluster: integrosa-platform (default) or b3net-prod; any other value fails before a token is requested"
+        required: false
+        type: string
+        default: "integrosa-platform"
       timeout:
         description: "Helm --timeout, 1m-10m: applies to each hook and to the wait separately, in the upgrade and again in a rollback"
         required: false
@@ -45,12 +58,14 @@ on:
 
 jobs:
   deploy:
-    # The organisation's self-hosted runners when CI_RUNNER is integrosa-ci (integrosa_platform ADR 0063: the
-    # cluster accepts tokens from them), else GitHub-hosted; deleting the variable moves deploys back. The job
+    # The organisation's self-hosted runners when CI_RUNNER is integrosa-ci and the cluster is integrosa-platform
+    # (integrosa_platform ADR 0063: that cluster accepts tokens from them), else GitHub-hosted; b3net-prod accepts
+    # only github-hosted tokens (b3net-bare-metal-iac ADR 0017), so it never goes there. Deleting the variable
+    # moves deploys back. The job
     # names the runner GROUP, not only the label: a runner outside the group (another org runner, a repository
     # runner) never gets a job carrying a cluster token, even with the same label. Only that value is honoured:
     # a repository variable of the same name overrides the organisation's.
-    runs-on: ${{ vars.CI_RUNNER == 'integrosa-ci' && fromJSON('{"group":"integrosa-ci","labels":["integrosa-ci"]}') || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.cluster == 'integrosa-platform' && vars.CI_RUNNER == 'integrosa-ci' && fromJSON('{"group":"integrosa-ci","labels":["integrosa-ci"]}') || 'ubuntu-latest' }}
     # Helm's --timeout applies to every operation on its own: each pre/post hook and the wait
     # (pkg/action/upgrade.go, hooks.go @ v4.3.0), and a rollback repeats that (rollin.Timeout = u.Timeout).
     # One pre-upgrade and one post-upgrade hook resource, no rollback hooks: pre hook, wait, post hook and
@@ -64,7 +79,7 @@ jobs:
     # queue: max keeps every waiting run; the default cancels a pending run (possibly the newer commit)
     # when another one queues (docs.github.com, concurrency; github/docs actions-group-concurrency.md).
     concurrency:
-      group: helm-deploy/${{ inputs.namespace }}/${{ inputs.release }}
+      group: helm-deploy/${{ inputs.cluster }}/${{ inputs.namespace }}/${{ inputs.release }}
       cancel-in-progress: false
       queue: max
     env:
@@ -75,7 +90,10 @@ jobs:
       IMAGE_DIGEST: ${{ inputs.image_digest }}
       IMAGES: ${{ inputs.images }}
       TIMEOUT: ${{ inputs.timeout }}
-      API_SERVER: https://194.163.128.14:6443
+      CLUSTER: ${{ inputs.cluster }}
+      VALUES_FILE: ${{ inputs.values_file }}
+      # integrosa-platform: API https://194.163.128.14:6443, audience integrosa-platform (step Select cluster);
+      # the name API_CA is the one integrosa_platform docs/runbooks/host.md (CA rotation) points to.
       # k3s server CA (CN=k3s-server-ca@1791238499, valid until 2036-11-21; sha256
       # 4C:F3:3A:BB:A1:F3:14:66:ED:0E:7B:D4:5D:7C:72:C6:F3:7F:12:27:AA:8A:58:98:73:04:AC:7F:20:C1:FB:1F).
       API_CA: |
@@ -160,11 +178,41 @@ jobs:
           Pr0GI1x35GipuWVsxjlp6AlfEcJGpbflgMGfrqpRsAQS0WdhhC1JfOeDxhkYM8Ao
           9/xLmRg6MzCnsC4SrZ7tsQzV99QF7lIFtg9uBb3qKiM+PRfHDULJ
           -----END CERTIFICATE-----
+      # b3net-prod: API https://5.9.48.90:6443 (DNAT to the node, b3net-bare-metal-iac ADR 0017), audience
+      # b3net-prod. k3s server CA (CN=k3s-server-ca@1792191745, valid until 2036-10-13; sha256
+      # 1C:41:CD:A3:8F:6B:B6:AF:87:75:04:0D:DA:9F:23:67:61:E7:02:E4:7F:30:0E:34:40:53:2D:A9:5B:3E:81:DD),
+      # /var/lib/rancher/k3s/server/tls/server-ca.crt on the node, read 2026-10-17.
+      B3NET_API_CA: |
+          -----BEGIN CERTIFICATE-----
+          MIIBdjCCAR2gAwIBAgIBADAKBggqhkjOPQQDAjAjMSEwHwYDVQQDDBhrM3Mtc2Vy
+          dmVyLWNhQDE3OTIxOTE3NDUwHhcNMjYxMDE2MjIwMjI1WhcNMzYxMDEzMjIwMjI1
+          WjAjMSEwHwYDVQQDDBhrM3Mtc2VydmVyLWNhQDE3OTIxOTE3NDUwWTATBgcqhkjO
+          PQIBBggqhkjOPQMBBwNCAATPIb6QTyO2bBjIff93BUNyxscmLL6Woe5qRbtT6fzT
+          /SY6nQx5tweTe0lZGjsyPIB4TOAItIwzmQgNqmdH5NvGo0IwQDAOBgNVHQ8BAf8E
+          BAMCAqQwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQU5l2NcpSCLgmfS+QAabav
+          T1vJM2IwCgYIKoZIzj0EAwIDRwAwRAIgaaa7DXIHYkkOvXivMCH+bqZ9R/l7B23b
+          G1cVzBFNptMCIB6VwrdVHrLIrvXGxT+Qc3CxZpEL+nTrvLxvRV3NfcSA
+          -----END CERTIFICATE-----
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      # Before anything that talks to a cluster (tests/helm-deploy-inputs.sh runs this step and checks the order).
+      # Writes the selected cluster's values to $GITHUB_ENV (expanded: the runner does not expand variables there)
+      # and its CA to a file; any other value exits before a token is requested and writes nothing.
+      - name: Select cluster
+        run: |
+          set -euo pipefail
+          case "$CLUSTER" in
+            integrosa-platform) server=https://194.163.128.14:6443; ca=$API_CA ;;
+            b3net-prod) server=https://5.9.48.90:6443; ca=$B3NET_API_CA ;;
+            *) echo "::error::unknown cluster (expected integrosa-platform or b3net-prod)"; exit 1 ;;
+          esac
+          printf '%s\n' "$ca" > "$RUNNER_TEMP/api-ca.pem"
+          # The token's audience and the kubeconfig's cluster name are $CLUSTER itself (job env).
+          printf '%s\n' "API_SERVER=$server" "API_CA_FILE=$RUNNER_TEMP/api-ca.pem" >> "$GITHUB_ENV"
 
       - name: Check inputs
         run: |
@@ -178,10 +226,12 @@ jobs:
           repo_body='[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)+'
           digest_body='sha256:[0-9a-f]{64}'
           name_body='[a-z][a-zA-Z0-9]{0,30}'
+          # A relative path of the caller's repo (chart_path, and values_file inside it); ".." segments are refused apart.
+          path_body='[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*'
           max_images=10
           [[ "$NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || { echo "namespace is not a DNS label" >&2; exit 1; }
           [[ "$RELEASE" =~ ^[a-z0-9]([-a-z0-9]{0,51}[a-z0-9])?$ ]] || { echo "release is not a valid Helm release name" >&2; exit 1; }
-          [[ "$CHART_PATH" =~ ^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$ && ! "/$CHART_PATH/" =~ /\.\.?/ ]] \
+          [[ "$CHART_PATH" =~ ^($path_body)$ && ! "/$CHART_PATH/" =~ /\.\.?/ ]] \
             || { echo "chart_path must be a relative directory inside the repo" >&2; exit 1; }
           [ -f "$CHART_PATH/Chart.yaml" ] || { echo "no Chart.yaml in $CHART_PATH" >&2; exit 1; }
           [[ "$TIMEOUT" =~ ^([1-9]|10)m$ ]] || { echo "timeout must be 1m-10m" >&2; exit 1; }
@@ -204,6 +254,18 @@ jobs:
             [[ "$IMAGE_DIGEST" =~ ^($digest_body)$ ]] || { echo "image_digest must be sha256:<64 hex> (or use images)" >&2; exit 1; }
             [[ "$IMAGE_REPOSITORY" =~ ^($repo_body)$ ]] || { echo "image_repository must be a registry path without tag or digest" >&2; exit 1; }
             printf '%s\n' --set-string "image.repository=$IMAGE_REPOSITORY" --set-string "image.digest=$IMAGE_DIGEST" > "$RUNNER_TEMP/set-args"
+          fi
+          # values_file: chart_path's path rules, a regular file, not in templates/, crds/ or charts/ (Helm would load
+          # it as a template, CRD or subchart). Symlinks are not resolved: Helm follows them inside the chart anyway, so
+          # the chart, not this check, is the boundary. Appended to set-args, so helm template (the Secret check) and
+          # helm upgrade both read it; --set-string still wins over it, so the images are always the build's.
+          if [ -n "$VALUES_FILE" ]; then
+            [[ "$VALUES_FILE" =~ ^($path_body)$ && ! "/$VALUES_FILE/" =~ /\.\.?/ ]] \
+              || { echo "values_file must be a relative path inside chart_path" >&2; exit 1; }
+            [[ ! "$VALUES_FILE" =~ ^(templates|crds|charts)/ ]] \
+              || { echo "values_file must not be in the chart's templates/, crds/ or charts/" >&2; exit 1; }
+            [ -f "$CHART_PATH/$VALUES_FILE" ] || { echo "no file $VALUES_FILE in $CHART_PATH" >&2; exit 1; }
+            printf '%s\n' --values "$CHART_PATH/$VALUES_FILE" >> "$RUNNER_TEMP/set-args"
           fi
 
       - name: Install Helm v4.3.0 and kubectl v1.36.5 (pinned checksums)
@@ -256,11 +318,11 @@ jobs:
           mkdir -p "$kube"
           cat > "$kube/token.sh" <<'EOF'
           #!/usr/bin/env bash
-          # Prints an ExecCredential with a new GitHub OIDC token (audience integrosa-platform); client-go
+          # Prints an ExecCredential with a new GitHub OIDC token (audience of the selected cluster); client-go
           # asks again after expirationTimestamp. Tokens travel through pipes, never argv.
           set -euo pipefail
           tok=$(curl -fsS -H @<(printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN") \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=integrosa-platform" | jq -r .value)
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$CLUSTER" | jq -r .value)
           printf '%s' "$tok" | jq -Rc '. as $t | split(".")[1] | gsub("-"; "+") | gsub("_"; "/")
             | . + ("=" * ((4 - length % 4) % 4)) | @base64d | fromjson
             | {apiVersion: "client.authentication.k8s.io/v1", kind: "ExecCredential",
@@ -268,13 +330,13 @@ jobs:
           EOF
           chmod 0700 "$kube/token.sh"
           # Written directly (not with kubectl config, which stores paths relative to the kubeconfig).
-          printf '%s' "$API_CA" | base64 | tr -d '\n' \
-            | jq -Rn --arg server "$API_SERVER" --arg cmd "$kube/token.sh" --arg ns "$NAMESPACE" '{
+          base64 < "$API_CA_FILE" | tr -d '\n' \
+            | jq -Rn --arg server "$API_SERVER" --arg cluster "$CLUSTER" --arg cmd "$kube/token.sh" --arg ns "$NAMESPACE" '{
                 apiVersion: "v1", kind: "Config", "current-context": "deploy",
-                clusters: [{name: "k3s", cluster: {server: $server, "certificate-authority-data": input}}],
+                clusters: [{name: $cluster, cluster: {server: $server, "certificate-authority-data": input}}],
                 users: [{name: "github", user: {exec: {apiVersion: "client.authentication.k8s.io/v1",
                   command: $cmd, interactiveMode: "Never"}}}],
-                contexts: [{name: "deploy", context: {cluster: "k3s", user: "github", namespace: $ns}}]}' \
+                contexts: [{name: "deploy", context: {cluster: $cluster, user: "github", namespace: $ns}}]}' \
             > "$kube/config"
           echo "KUBECONFIG=$kube/config" >> "$GITHUB_ENV"
 
