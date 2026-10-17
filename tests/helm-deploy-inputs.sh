@@ -10,15 +10,26 @@ script=$(yq -e '.jobs.deploy.steps[] | select(.name == "Check inputs") | .run' "
 fail=0
 ARGS=
 run() { # run <expect 0|1> <name>; inputs in IMAGES IMAGE_REPOSITORY IMAGE_DIGEST TIMEOUT VF (values_file); VF_MAKE
-  # creates that file in the chart, VF_DIR that directory
+  # creates that file in the chart, VF_DIR that directory; LINK=<path> puts a symlink to a file outside the chart at
+  # chart/<path> (LINK_DIR=1: to a directory outside, LINK_DANGLING=1: to nothing), CHART_LINK=1 makes the chart
+  # directory itself a symlink (the chart then lives in real-chart/), PARENT_LINK=1 puts the chart under deploy/ ->
+  # real/ (use CP=deploy/chart). The step's stderr is left in ERR.
   local tmp rc
   tmp=$(mktemp -d); mkdir -p "$tmp/chart"; touch "$tmp/chart/Chart.yaml"
   if [ -n "${VF_MAKE:-}" ]; then mkdir -p "$(dirname "$tmp/chart/$VF_MAKE")"; touch "$tmp/chart/$VF_MAKE"; fi
   if [ -n "${VF_DIR:-}" ]; then mkdir -p "$tmp/chart/$VF_DIR"; fi
+  if [ -n "${LINK:-}" ]; then
+    echo secret > "$tmp/outside.txt"; mkdir -p "$tmp/outside-dir" "$(dirname "$tmp/chart/$LINK")"
+    target="$tmp/outside.txt"; [ -z "${LINK_DIR:-}" ] || target="$tmp/outside-dir"; [ -z "${LINK_DANGLING:-}" ] || target="$tmp/nothing"
+    ln -s "$target" "$tmp/chart/$LINK"
+  fi
+  if [ -n "${CHART_LINK:-}" ]; then mv "$tmp/chart" "$tmp/real-chart"; ln -s real-chart "$tmp/chart"; fi
+  if [ -n "${PARENT_LINK:-}" ]; then mkdir -p "$tmp/real"; mv "$tmp/chart" "$tmp/real/chart"; ln -s real "$tmp/deploy"; fi
   ( cd "$tmp" && RUNNER_TEMP="$tmp" NAMESPACE="${NS:-b3net-staging}" RELEASE="${REL:-medusa}" CHART_PATH="${CP:-chart}" \
       IMAGES="${IMAGES:-}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-}" IMAGE_DIGEST="${IMAGE_DIGEST:-}" TIMEOUT="${TIMEOUT:-5m}" \
       VALUES_FILE="${VF:-}" \
-      bash -c "$script" >/dev/null 2>&1 ); rc=$?
+      bash -c "$script" >/dev/null 2>"$tmp/stderr" ); rc=$?
+  ERR=$(cat "$tmp/stderr" 2>/dev/null)
   if { [ "$1" = 0 ] && [ "$rc" = 0 ]; } || { [ "$1" = 1 ] && [ "$rc" != 0 ]; }; then echo "ok   $2"; else echo "FAIL $2 (exit $rc)"; fail=1; fi
   ARGS=$(cat "$tmp/set-args" 2>/dev/null); rm -rf "$tmp"
   if [ "$rc" = 0 ] && [ -z "$ARGS" ]; then echo "FAIL $2: success without arguments"; fail=1; fi
@@ -88,6 +99,23 @@ done
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=env/templates/prod.yaml VF_MAKE=env/templates/prod.yaml run 0 "values_file in a nested templates/ (not Helm's)"
 IMAGES="{\"backend\":{\"repository\":\"$R\",\"digest\":\"$D\"}}" VF=values-prod.yaml VF_MAKE=values-prod.yaml run 0 "images with values_file"
 if [ "$(tail -2 <<<"$ARGS")" = $'--values\nchart/values-prod.yaml' ] && grep -qx -- "images.backend.digest=$D" <<<"$ARGS"; then echo "ok   images with values_file args"; else echo "FAIL images with values_file args: $ARGS"; fail=1; fi
+# No symlink anywhere in the chart, nor as the chart directory: Helm follows them (.Files.Get, --values), so a committed
+# symlink could read any file on the runner, /proc/self/environ with the job's tokens included, into the release.
+err_says() { # err_says <name> <text>: the last run failed for this reason, not another one
+  if grep -qF -- "$2" <<<"$ERR"; then echo "ok   $1: refused by the symlink check"; else echo "FAIL $1: stderr was: $ERR"; fail=1; fi
+}
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D LINK=link.txt run 1 "symlink in the chart"; err_says "symlink in the chart" "must not contain symlinks"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D LINK=files/deep/link.txt run 1 "symlink deep in the chart"; err_says "symlink deep in the chart" "must not contain symlinks"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D LINK=files LINK_DIR=1 run 1 "symlink to a directory in the chart"; err_says "symlink to a directory" "must not contain symlinks"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D LINK=gone.txt LINK_DANGLING=1 run 1 "dangling symlink in the chart"; err_says "dangling symlink" "must not contain symlinks"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D LINK=values-prod.yaml VF=values-prod.yaml run 1 "values_file that is a symlink"; err_says "values_file symlink" "must not contain symlinks"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D CHART_LINK=1 run 1 "chart directory that is a symlink"; err_says "chart directory symlink" "chart_path must not go through a symlink"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D PARENT_LINK=1 CP=deploy/chart run 1 "chart under a symlinked parent"; err_says "symlinked parent" "chart_path must not go through a symlink"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF_MAKE=files/deep/ok.txt run 0 "regular files deep in the chart (control)"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF_DIR=sub CP=chart/sub run 1 "chart directory without Chart.yaml"
+if grep -qF "no Chart.yaml in chart/sub" <<<"$ERR"; then echo "ok   missing Chart.yaml: its own message"; else echo "FAIL missing Chart.yaml message: $ERR"; fail=1; fi
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D CP=missing run 1 "chart path that does not exist"
+if grep -qF "no Chart.yaml in missing" <<<"$ERR"; then echo "ok   missing chart path: its own message"; else echo "FAIL missing chart path message: $ERR"; fail=1; fi
 # values_file follows chart_path's path rules: both checks use the same pattern.
 if [ "$(grep -c '=~ ^($path_body)\$' <<<"$script")" = 2 ]; then echo "ok   chart_path and values_file share the path pattern"; else echo "FAIL chart_path and values_file do not share path_body"; fail=1; fi
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D VF=$'values.yaml\n--set\nx=y' VF_MAKE=values.yaml run 1 "values_file with a newline"

@@ -234,6 +234,15 @@ jobs:
           [[ "$CHART_PATH" =~ ^($path_body)$ && ! "/$CHART_PATH/" =~ /\.\.?/ ]] \
             || { echo "chart_path must be a relative directory inside the repo" >&2; exit 1; }
           [ -f "$CHART_PATH/Chart.yaml" ] || { echo "no Chart.yaml in $CHART_PATH" >&2; exit 1; }
+          # No symlink as chart_path or any of its parents (its canonical path must be the path as written), nor
+          # anywhere inside the chart: Helm follows them (.Files.Get, --values), so a committed symlink could read any
+          # file on the runner, /proc/self/environ with this job's tokens included, into the release
+          # (integrosa_platform ADR 0071). No chart in the organisation has one (survey 2026-10-18). values_file lies
+          # inside the chart, so this covers it too.
+          [ "$(cd "$CHART_PATH" && pwd -P)" = "$(pwd -P)/$CHART_PATH" ] \
+            || { echo "chart_path must not go through a symlink" >&2; exit 1; }
+          link=$(find "$CHART_PATH" -type l -print -quit)
+          [ -z "$link" ] || { echo "the chart must not contain symlinks ($link)" >&2; exit 1; }
           [[ "$TIMEOUT" =~ ^([1-9]|10)m$ ]] || { echo "timeout must be 1m-10m" >&2; exit 1; }
           if [ -n "$IMAGES" ]; then
             [ -z "$IMAGE_REPOSITORY$IMAGE_DIGEST" ] || { echo "use images or image_repository/image_digest, not both" >&2; exit 1; }
@@ -256,9 +265,9 @@ jobs:
             printf '%s\n' --set-string "image.repository=$IMAGE_REPOSITORY" --set-string "image.digest=$IMAGE_DIGEST" > "$RUNNER_TEMP/set-args"
           fi
           # values_file: chart_path's path rules, a regular file, not in templates/, crds/ or charts/ (Helm would load
-          # it as a template, CRD or subchart). Symlinks are not resolved: Helm follows them inside the chart anyway, so
-          # the chart, not this check, is the boundary. Appended to set-args, so helm template (the Secret check) and
-          # helm upgrade both read it; --set-string still wins over it, so the images are always the build's.
+          # it as a template, CRD or subchart). Symlinks are refused above for the whole chart. Appended to set-args, so
+          # helm template (the Secret check) and helm upgrade both read it; --set-string still wins over it, so the
+          # images are always the build's.
           if [ -n "$VALUES_FILE" ]; then
             [[ "$VALUES_FILE" =~ ^($path_body)$ && ! "/$VALUES_FILE/" =~ /\.\.?/ ]] \
               || { echo "values_file must be a relative path inside chart_path" >&2; exit 1; }
