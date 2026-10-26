@@ -45,6 +45,11 @@ on:
         required: false
         type: string
         default: ""
+      app_version:
+        description: "The release the deploy runs (v<major>.<minor>.<patch>, optionally -<pre-release>), passed as --set-string appVersion=<value> for the chart to use; empty for none"
+        required: false
+        type: string
+        default: ""
       cluster:
         description: "Target cluster: integrosa-platform (default) or b3net-prod; any other value fails before a token is requested"
         required: false
@@ -92,6 +97,7 @@ jobs:
       TIMEOUT: ${{ inputs.timeout }}
       CLUSTER: ${{ inputs.cluster }}
       VALUES_FILE: ${{ inputs.values_file }}
+      APP_VERSION: ${{ inputs.app_version }}
       # integrosa-platform: API https://194.163.128.14:6443, audience integrosa-platform (step Select cluster);
       # the name API_CA is the one integrosa_platform docs/runbooks/host.md (CA rotation) points to.
       # k3s server CA (CN=k3s-server-ca@1791238499, valid until 2036-11-21; sha256
@@ -275,6 +281,13 @@ jobs:
               || { echo "values_file must not be in the chart's templates/, crds/ or charts/" >&2; exit 1; }
             [ -f "$CHART_PATH/$VALUES_FILE" ] || { echo "no file $VALUES_FILE in $CHART_PATH" >&2; exit 1; }
             printf '%s\n' --values "$CHART_PATH/$VALUES_FILE" >> "$RUNNER_TEMP/set-args"
+          fi
+          # app_version: a SemVer release, v-prefixed, with an optional dot-separated pre-release of letters and
+          # digits; nothing --set-string would split or nest beyond its one key (no "," or "=").
+          if [ -n "$APP_VERSION" ]; then
+            [[ "$APP_VERSION" =~ ^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})(-[0-9A-Za-z]{1,20}(\.[0-9A-Za-z]{1,20}){0,3})?$ ]] \
+              || { echo "app_version must be vX.Y.Z with an optional -<pre-release>" >&2; exit 1; }
+            printf '%s\n' --set-string "appVersion=$APP_VERSION" >> "$RUNNER_TEMP/set-args"
           fi
 
       - name: Install Helm v4.3.0 and kubectl v1.36.5 (pinned checksums)
