@@ -27,7 +27,7 @@ run() { # run <expect 0|1> <name>; inputs in IMAGES IMAGE_REPOSITORY IMAGE_DIGES
   if [ -n "${PARENT_LINK:-}" ]; then mkdir -p "$tmp/real"; mv "$tmp/chart" "$tmp/real/chart"; ln -s real "$tmp/deploy"; fi
   ( cd "$tmp" && RUNNER_TEMP="$tmp" NAMESPACE="${NS:-b3net-staging}" RELEASE="${REL:-medusa}" CHART_PATH="${CP:-chart}" \
       IMAGES="${IMAGES:-}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-}" IMAGE_DIGEST="${IMAGE_DIGEST:-}" TIMEOUT="${TIMEOUT:-5m}" \
-      VALUES_FILE="${VF:-}" \
+      VALUES_FILE="${VF:-}" APP_VERSION="${AV:-}" \
       bash -c "$script" >/dev/null 2>"$tmp/stderr" ); rc=$?
   ERR=$(cat "$tmp/stderr" 2>/dev/null)
   if { [ "$1" = 0 ] && [ "$rc" = 0 ]; } || { [ "$1" = 1 ] && [ "$rc" != 0 ]; }; then echo "ok   $2"; else echo "FAIL $2 (exit $rc)"; fail=1; fi
@@ -177,6 +177,16 @@ order=$(yq '[.jobs.deploy.steps[] | .name] as $n | [.jobs.deploy.steps | to_entr
 if [ "$order" = true ]; then echo "ok   Select cluster runs before every step that uses the cluster"; else echo "FAIL a step uses the cluster before Select cluster"; fail=1; fi
 # runs-on is an Actions expression: the text must offer self-hosted runners to integrosa-platform only, because
 # the b3net-prod API accepts only runner_environment github-hosted (b3net-bare-metal-iac ADR 0017).
+# app_version: appended as one --set-string, refused when it is not vX.Y.Z[-pre-release].
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV=v1.4.0 run 0 "app_version"
+if [ "$(tail -2 <<<"$ARGS")" = $'--set-string\nappVersion=v1.4.0' ]; then echo "ok   app_version args"; else echo "FAIL app_version args: $ARGS"; fail=1; fi
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV=v1.4.0-staging.abc1234 run 0 "app_version with a pre-release"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D run 0 "no app_version"
+if ! grep -q appVersion <<<"$ARGS"; then echo "ok   no app_version, no argument"; else echo "FAIL argument without app_version: $ARGS"; fail=1; fi
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV=1.4.0 run 1 "app_version without v"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV='v1.4.0,image.digest=x' run 1 "app_version with a comma"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV=$'v1.4.0\n--set\nx=y' run 1 "app_version with a newline"
+IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV=v01.4.0 run 1 "app_version with a leading zero"
 if yq '.jobs.deploy.runs-on' "$wf" | grep -qF "inputs.cluster == 'integrosa-platform' && vars.CI_RUNNER == 'integrosa-ci'"; then echo "ok   self-hosted runners only for integrosa-platform"; else echo "FAIL runs-on may route b3net-prod to self-hosted runners"; fail=1; fi
 if [ "$(yq '.jobs.deploy.concurrency.group' "$wf")" = 'helm-deploy/${{ inputs.cluster }}/${{ inputs.namespace }}/${{ inputs.release }}' ]; then echo "ok   queue per cluster"; else echo "FAIL concurrency group without the cluster"; fail=1; fi
 if grep -qF 'audience=$CLUSTER' "$wf" && ! grep -q 'audience=integrosa-platform' "$wf"; then echo "ok   token audience from the selected cluster"; else echo "FAIL token audience is not the selected cluster's"; fail=1; fi
