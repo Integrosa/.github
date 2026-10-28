@@ -63,14 +63,13 @@ on:
 
 jobs:
   deploy:
-    # The organisation's self-hosted runners when CI_RUNNER is integrosa-ci and the cluster is integrosa-platform
-    # (integrosa_platform ADR 0063: that cluster accepts tokens from them), else GitHub-hosted; b3net-prod accepts
-    # only github-hosted tokens (b3net-bare-metal-iac ADR 0017), so it never goes there. Deleting the variable
-    # moves deploys back. The job
+    # The organisation's self-hosted runners when CI_RUNNER is integrosa-ci, else GitHub-hosted, for both
+    # clusters: each accepts tokens from them (integrosa_platform ADR 0063, b3net-bare-metal-iac ADR 0018).
+    # Deleting the variable moves deploys back. The job
     # names the runner GROUP, not only the label: a runner outside the group (another org runner, a repository
     # runner) never gets a job carrying a cluster token, even with the same label. Only that value is honoured:
     # a repository variable of the same name overrides the organisation's.
-    runs-on: ${{ inputs.cluster == 'integrosa-platform' && vars.CI_RUNNER == 'integrosa-ci' && fromJSON('{"group":"integrosa-ci","labels":["integrosa-ci"]}') || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER == 'integrosa-ci' && fromJSON('{"group":"integrosa-ci","labels":["integrosa-ci"]}') || 'ubuntu-latest' }}
     # Helm's --timeout applies to every operation on its own: each pre/post hook and the wait
     # (pkg/action/upgrade.go, hooks.go @ v4.3.0), and a rollback repeats that (rollin.Timeout = u.Timeout).
     # One pre-upgrade and one post-upgrade hook resource, no rollback hooks: pre hook, wait, post hook and
@@ -368,7 +367,7 @@ jobs:
           tok=$("$RUNNER_TEMP/kube/token.sh" | jq -r .status.token)
           echo "::add-mask::$tok"
           printf '%s' "$tok" | cut -d. -f2 | jq -Rr 'gsub("-"; "+") | gsub("_"; "/") | . + ("=" * ((4 - length % 4) % 4))
-            | @base64d | fromjson | {repository_owner_id, repository_id, ref, event_name, job_workflow_ref, aud, lifetime_s: (.exp - .iat)}'
+            | @base64d | fromjson | {repository_owner_id, repository_id, ref, event_name, job_workflow_ref, runner_environment, aud, lifetime_s: (.exp - .iat)}'
           unset tok
           # Diagnostic only (the runner image's kubectl): never blocks the deploy.
           kubectl auth whoami || echo "::warning::kubectl auth whoami failed"

@@ -12,8 +12,8 @@ before a token is requested.
 
 | `cluster` | API | Audience | Runner | Owner |
 |-----------|-----|----------|--------|-------|
-| `integrosa-platform` (default) | `https://194.163.128.14:6443` | `integrosa-platform` | the organization's self-hosted runners when the organization variable `CI_RUNNER` is `integrosa-ci` (integrosa_platform ADR 0063), else `ubuntu-latest` | `integrosa_platform` |
-| `b3net-prod` | `https://5.9.48.90:6443` | `b3net-prod` | always `ubuntu-latest`: this API accepts only `runner_environment` `github-hosted` | `b3net-bare-metal-iac` (ADR 0013, 0017) |
+| `integrosa-platform` (default) | `https://194.163.128.14:6443` | `integrosa-platform` | the organization's self-hosted runners (group `integrosa-ci`) when the variable `CI_RUNNER` is `integrosa-ci` (the organization's, or the calling repository's, which overrides it; integrosa_platform ADR 0063), else `ubuntu-latest` | `integrosa_platform` |
+| `b3net-prod` | `https://5.9.48.90:6443` | `b3net-prod` | the same as `integrosa-platform` (b3net-bare-metal-iac ADR 0018) | `b3net-bare-metal-iac` (ADR 0013, 0017, 0018) |
 
 The workflow `Cross-audience` sends a real token minted for one cluster's audience to the other cluster's
 API and expects 401, with each certificate verified by the pinned CA. Both clusters also require this

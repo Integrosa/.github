@@ -175,8 +175,6 @@ select_cluster 1 "cluster as an address" https://evil:6443
 if [ "$(yq '.on.workflow_call.inputs.cluster.default' "$wf")" = integrosa-platform ]; then echo "ok   cluster defaults to integrosa-platform"; else echo "FAIL cluster default"; fail=1; fi
 order=$(yq '[.jobs.deploy.steps[] | .name] as $n | [.jobs.deploy.steps | to_entries[] | select(.value.name != "Select cluster" and ((.value.run // "") | test("ACTIONS_ID_TOKEN|API_SERVER|API_CA_FILE|KUBECONFIG|token\\.sh|kubectl |helm (upgrade|history|status)"))) | .key] | map(. > ($n | to_entries[] | select(.value == "Select cluster") | .key)) | all' "$wf")
 if [ "$order" = true ]; then echo "ok   Select cluster runs before every step that uses the cluster"; else echo "FAIL a step uses the cluster before Select cluster"; fail=1; fi
-# runs-on is an Actions expression: the text must offer self-hosted runners to integrosa-platform only, because
-# the b3net-prod API accepts only runner_environment github-hosted (b3net-bare-metal-iac ADR 0017).
 # app_version: appended as one --set-string, refused when it is not vX.Y.Z[-pre-release].
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV=v1.4.0 run 0 "app_version"
 if [ "$(tail -2 <<<"$ARGS")" = $'--set-string\nappVersion=v1.4.0' ]; then echo "ok   app_version args"; else echo "FAIL app_version args: $ARGS"; fail=1; fi
@@ -187,7 +185,14 @@ IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV=1.4.0 run 1 "app_version withou
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV='v1.4.0,image.digest=x' run 1 "app_version with a comma"
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV=$'v1.4.0\n--set\nx=y' run 1 "app_version with a newline"
 IMAGES='' IMAGE_REPOSITORY=$R IMAGE_DIGEST=$D AV=v01.4.0 run 1 "app_version with a leading zero"
-if yq '.jobs.deploy.runs-on' "$wf" | grep -qF "inputs.cluster == 'integrosa-platform' && vars.CI_RUNNER == 'integrosa-ci'"; then echo "ok   self-hosted runners only for integrosa-platform"; else echo "FAIL runs-on may route b3net-prod to self-hosted runners"; fail=1; fi
+# runs-on is an Actions expression, compared as text: the integrosa-ci group (not only its label) when CI_RUNNER
+# is exactly integrosa-ci, else ubuntu-latest. Both clusters accept tokens from the organisation's self-hosted
+# runners (integrosa_platform ADR 0063, b3net-bare-metal-iac ADR 0018).
+want_runs_on=$(cat <<'EOF'
+${{ vars.CI_RUNNER == 'integrosa-ci' && fromJSON('{"group":"integrosa-ci","labels":["integrosa-ci"]}') || 'ubuntu-latest' }}
+EOF
+)
+if [ "$(yq '.jobs.deploy.runs-on' "$wf")" = "$want_runs_on" ]; then echo "ok   runs-on: the integrosa-ci group or ubuntu-latest"; else echo "FAIL runs-on is not the integrosa-ci group or ubuntu-latest"; fail=1; fi
 if [ "$(yq '.jobs.deploy.concurrency.group' "$wf")" = 'helm-deploy/${{ inputs.cluster }}/${{ inputs.namespace }}/${{ inputs.release }}' ]; then echo "ok   queue per cluster"; else echo "FAIL concurrency group without the cluster"; fail=1; fi
 if grep -qF 'audience=$CLUSTER' "$wf" && ! grep -q 'audience=integrosa-platform' "$wf"; then echo "ok   token audience from the selected cluster"; else echo "FAIL token audience is not the selected cluster's"; fail=1; fi
 if grep -qF '`b3net-prod`' docs/helm-deploy-workflow.md && grep -qF 'https://5.9.48.90:6443' docs/helm-deploy-workflow.md; then echo "ok   docs list the clusters"; else echo "FAIL docs do not list the clusters"; fail=1; fi
