@@ -218,6 +218,9 @@ Error: Input required and not supplied: registry_token
 1. Verify secret is set at organization level
 2. Check secret visibility includes the repository
 3. Ensure secret name is exactly `REGISTRY_TOKEN` (case-sensitive)
+4. A B3NET project passes `B3NET_REGISTRY_TOKEN` as `REGISTRY_TOKEN` through an explicit `secrets:` map
+   ([docker-build-workflow.md](docker-build-workflow.md)): check that this secret's "Selected repositories"
+   include the repository, and that the caller's ref declares the secret
 
 ### Problem: Variable not found
 

@@ -56,6 +56,13 @@ on:
         required: false
         type: string
         default: "."
+    # Optional and declared only so a caller can pass a registry key under another name, e.g.
+    # `secrets: {REGISTRY_TOKEN: ${{ secrets.B3NET_REGISTRY_TOKEN }}}`. Callers with `secrets: inherit` are unchanged:
+    # inherit passes every secret of the caller, declared or not, so the organisation's REGISTRY_TOKEN still arrives.
+    secrets:
+      REGISTRY_TOKEN:
+        description: "Registry key for docker login; default with secrets: inherit is the caller's REGISTRY_TOKEN"
+        required: false
     outputs:
       version:
         description: "Semantic version without prefix (e.g., '1.2.3')"
