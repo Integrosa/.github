@@ -141,6 +141,28 @@ Set at: `https://github.com/organizations/Integrosa/settings/secrets/actions`
 REGISTRY_TOKEN=<your-scaleway-registry-token>
 ```
 
+`REGISTRY_TOKEN` is also declared as an optional secret of the workflow, so a caller can pass another key under
+that name instead of `secrets: inherit`. B3NET projects push to the `b3net` namespace with the organisation secret
+`B3NET_REGISTRY_TOKEN` (visible to selected repositories) and the repository variable `REGISTRY_NAMESPACE=b3net`:
+
+```yaml
+permissions:
+  contents: write  # the build pushes a git tag
+jobs:
+  build:
+    uses: Integrosa/.github/.github/workflows/reusable-docker-build.yml@<commit>
+    with:
+      organization_name: b3net
+      project_name: my-app
+    secrets:
+      REGISTRY_TOKEN: ${{ secrets.B3NET_REGISTRY_TOKEN }}
+```
+
+With an explicit `secrets:` map the workflow receives only the secrets listed there. `secrets: inherit` keeps
+working as before. The map needs a ref that already declares the secret (this change or a release after it): an
+older ref rejects it with "secret REGISTRY_TOKEN is not defined in the referenced workflow". If the mapped secret is
+not visible to the repository, it arrives empty and `docker login` fails; check its "Selected repositories".
+
 ## Permissions
 
 The workflow requires the following permissions:

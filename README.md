@@ -125,6 +125,12 @@ Set these at: `https://github.com/organizations/Integrosa/settings/secrets/actio
 |--------|-------------|
 | `REGISTRY_TOKEN` | Container registry access token |
 
+### Optional Organization Secrets
+
+| Secret | Description |
+|--------|-------------|
+| `B3NET_REGISTRY_TOKEN` | Push key for the `b3net` namespace, visible to selected repositories only; B3NET projects pass it as `REGISTRY_TOKEN` (see [docs/docker-build-workflow.md](docs/docker-build-workflow.md)) |
+
 ### Optional Repository Secrets
 
 For deployment workflows:
